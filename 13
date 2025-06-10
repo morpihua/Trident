@@ -1,0 +1,1899 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Python port of flipflip's AlpineQuest (https://www.alpinequest.net/) tools
+# Original Perl script by Philippe Kehl <flipflip at oinkzwurgl dot org> and contributors
+#
+# This script is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later version.
+#
+# This script is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+# PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with this
+# script. If not, see <http://www.gnu.org/licenses/>.
+#
+
+import argparse
+import struct
+import sys
+import os
+import base64
+import json
+import csv
+from datetime import datetime, timezone
+import copy  # For deepcopy, equivalent to Perl's Clone
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+
+# --- Глобальні налаштування ---
+# Кольори для виводу (спрощено)
+COLORS = {
+    "W": "\033[33m",  # Жовтий для WARNING
+    "E": "\033[31m",  # Червоний для ERROR
+    "P": "",  # Звичайний для PRINT
+    "D": "\033[36m",  # Блакитний для DEBUG
+    "T": "\033[36m",  # Блакитний для TRACE
+    "c": "\033[35m",  # Пурпурний для назв функцій у трейсі
+    "o": "\033[m",  # Скинути колір
+}
+NO_COLORS = {key: "" for key in COLORS}
+
+# Спроба ініціалізувати colorama для Windows
+colorama_imported = False
+if os.name == 'nt':
+    try:
+        import colorama
+
+        colorama.init()
+        colorama_imported = True
+    except ImportError:
+        pass  # colorama не встановлено, кольори не працюватимуть у старому cmd.exe
+
+
+# --- Базовий клас ---
+class Base:
+    def __init__(self, verbosity=0, use_colors=None, gui_log_widget=None):
+        self.verbosity = verbosity
+        self.gui_log_widget = gui_log_widget
+
+        if use_colors is None:
+            if os.name == 'nt':
+                self.use_colors = colorama_imported
+            else:
+                self.use_colors = sys.stderr.isatty()
+        else:
+            self.use_colors = use_colors
+
+        self.colors = COLORS if self.use_colors else NO_COLORS
+
+    def _print_message(self, level_char, message, *args):
+        level_map = {
+            'E': (-2, "ERROR: "),
+            'W': (-1, "WARNING: "),
+            'P': (0, ""),
+            'D': (1, "D "),
+            'T': (2, "T "),
+        }
+        min_verbosity, prefix_text = level_map.get(level_char, (0, "? "))
+
+        if self.verbosity >= min_verbosity:
+            # Формування повідомлення
+            if args:
+                processed_args = []
+                for arg in args:
+                    if isinstance(arg, (dict, list, tuple)):
+                        processed_args.append(json.dumps(arg, indent=None, sort_keys=True, ensure_ascii=False))
+                    elif arg is None:
+                        processed_args.append('<undef>')
+                    else:
+                        processed_args.append(str(arg))
+                try:
+                    formatted_message_body = message % tuple(processed_args)
+                except TypeError:
+                    formatted_message_body = str(message) + " " + " ".join(map(str, processed_args))
+            else:
+                if isinstance(message, (dict, list, tuple)):
+                    formatted_message_body = json.dumps(message, indent=None, sort_keys=True, ensure_ascii=False)
+                elif message is None:
+                    formatted_message_body = '<undef>'
+                else:
+                    formatted_message_body = str(message)
+
+            # Вивід у GUI або консоль
+            if self.gui_log_widget:
+                log_prefix = prefix_text
+                if level_char in ['D', 'T']:
+                    try:
+                        raise Exception
+                    except Exception:
+                        frame = sys.exc_info()[2].tb_frame
+                        f = frame.f_back.f_back if frame and frame.f_back and frame.f_back.f_back else (
+                            frame.f_back if frame.f_back else frame)
+                        func_name = f.f_code.co_name
+                        log_prefix += f"{func_name}(): "
+
+                self.gui_log_widget.configure(state='normal')
+                self.gui_log_widget.insert(tk.END, f"{log_prefix}{formatted_message_body}\n")
+                self.gui_log_widget.configure(state='disabled')
+                self.gui_log_widget.see(tk.END)
+            else:  # Консольний вивід
+                full_prefix_cli = self.colors.get(level_char, "") + prefix_text
+                suffix_cli = self.colors.get("o", "")
+                if level_char in ['D', 'T']:
+                    try:
+                        raise Exception
+                    except Exception:
+                        frame = sys.exc_info()[2].tb_frame
+                        f = frame.f_back.f_back if frame and frame.f_back and frame.f_back.f_back else (
+                            frame.f_back if frame.f_back else frame)
+                        func_name = f.f_code.co_name
+                        full_prefix_cli += f"{self.colors['c']}{func_name}(){self.colors.get(level_char, '')}: {self.colors['o']}"
+
+                print(f"{full_prefix_cli}{formatted_message_body}{suffix_cli}", file=sys.stderr)
+        return True
+
+    def error(self, message, *args):
+        return self._print_message('E', message, *args)
+
+    def warning(self, message, *args):
+        return self._print_message('W', message, *args)
+
+    def print_out(self, message, *args):
+        return self._print_message('P', message, *args)
+
+    def debug(self, message, *args):
+        return self._print_message('D', message, *args)
+
+    def trace(self, message, *args):
+        return self._print_message('T', message, *args)
+
+    def trace_hexdump(self, data_bytes):
+        if self.verbosity >= 2:
+            data_size = len(data_bytes)
+            for offs in range(0, data_size, 16):
+                chunk = data_bytes[offs:offs + 16]
+                hex_parts = []
+                for i in range(16):
+                    if (i % 4) == 0:
+                        hex_parts.append(' ')
+                    if i < len(chunk):
+                        hex_parts.append(f"{chunk[i]:02x}")
+                    else:
+                        hex_parts.append("  ")
+
+                char_parts = []
+                for i in range(16):
+                    if (i % 4) == 0:
+                        char_parts.append('|')
+                    if i < len(chunk):
+                        char_val = chunk[i]
+                        char_parts.append(chr(char_val) if 32 <= char_val < 127 else '.')
+                    else:
+                        char_parts.append(' ')
+                char_parts.append('|')
+
+                self.trace(f"0x{offs:04x} ({offs:04d}){''.join(hex_parts)}  {''.join(char_parts)}")
+        return True
+
+    def _load_raw(self, path):
+        if not (path and os.path.exists(path)):
+            self.warning("Файл '%s' не знайдено!", path)
+            return None
+        try:
+            with open(path, 'rb') as f:
+                raw_data = f.read()
+            self.trace("Прочитано '%s': %d байт.", path, len(raw_data))
+            return raw_data
+        except IOError as e:
+            self.warning("Помилка читання '%s': %s", path, e)
+            return None
+        except Exception as e:
+            self.warning("Неочікувана помилка при читанні '%s': %s", path, e)
+            return None
+
+
+# --- Клас для файлів AlpineQuest ---
+class ApqFile(Base):
+    def __init__(self, path=None, rawdata=None, rawname=None, file_type=None, rawts=None, verbosity=0, use_colors=None,
+                 gui_log_widget=None):
+        super().__init__(verbosity, use_colors, gui_log_widget)
+        self.path = path
+        self.rawdata = rawdata
+        self.rawname = rawname
+        self.type = file_type
+        self.rawts = rawts
+
+        self.rawoffs = 0
+        self.rawsize = 0
+        self.version = 0
+
+        self.meta = {}
+        self.location = {}
+        self.waypoints = []
+        self.locations = []
+        self.segments = []
+        self.root_node_ldk = {}
+
+        if self.path:
+            self.trace('new(path => %s)', self.path)
+            _, ext = os.path.splitext(self.path)
+            ext = ext.lower().lstrip('.')
+            if ext in ['wpt', 'set', 'rte', 'are', 'trk', 'ldk']:
+                self.type = ext
+                self.rawdata = self._load_raw(self.path)
+                if self.rawdata is None:
+                    raise ValueError(f"Не вдалося завантажити дані з {self.path}")
+                try:
+                    self.rawts = os.path.getmtime(self.path)
+                except OSError:
+                    self.rawts = datetime.now(timezone.utc).timestamp()
+            else:
+                self.error("Невідомий тип файлу: %s!", self.path)
+                raise ValueError(f"Невідомий тип файлу: {self.path}")
+        elif self.rawdata and self.type and self.rawname:
+            if self.type not in ['wpt', 'set', 'rte', 'are', 'trk', 'ldk']:
+                self.error("Невідомий тип файлу: %s!", self.type)
+                raise ValueError(f"Невідомий тип файлу: {self.type}")
+            self.path = self.rawname
+            self.rawts = self.rawts if self.rawts is not None else datetime.now(timezone.utc).timestamp()
+        else:
+            self.error("Неправильні параметри для ApqFile!")
+            raise ValueError("Неправильні параметри для ApqFile (потрібен path або rawdata+type+rawname)")
+
+        self.rawsize = len(self.rawdata)
+        if self.verbosity >= 3:
+            self.trace_hexdump(self.rawdata)
+
+        res = self._parse()
+        if not res:
+            pass
+
+        if self.rawoffs != self.rawsize and res:
+            self.debug('Невикористані дані, завершено на 0x%04x/0x%04x.', self.rawoffs, self.rawsize)
+
+    def _parse(self):
+        parsers = {
+            'wpt': self._parse_wpt,
+            'set': self._parse_set,
+            'rte': self._parse_rte,
+            'are': self._parse_are,
+            'trk': self._parse_trk,
+            'ldk': self._parse_ldk,
+        }
+        parser_func = parsers.get(self.type)
+        if parser_func:
+            try:
+                return parser_func()
+            except Exception as e:
+                self.error("Виняток під час розбору %s: %s", self.type, e)
+                return False
+        self.error("Немає парсера для типу файлу: %s", self.type)
+        return False
+
+    def get_data_structure(self):
+        data_struct = {
+            'ts': self.rawts,
+            'type': self.type,
+            'path': self.path,
+            'file': os.path.basename(self.path),
+        }
+        if self.type == 'wpt':
+            data_struct['meta'] = copy.deepcopy(self.meta)
+            data_struct['location'] = copy.deepcopy(self.location)
+        elif self.type == 'set':
+            data_struct['meta'] = copy.deepcopy(self.meta)
+            data_struct['waypoints'] = copy.deepcopy(self.waypoints)
+        elif self.type == 'rte':
+            data_struct['meta'] = copy.deepcopy(self.meta)
+            data_struct['waypoints'] = copy.deepcopy(self.waypoints)
+        elif self.type == 'are':
+            data_struct['meta'] = copy.deepcopy(self.meta)
+            data_struct['locations'] = copy.deepcopy(self.locations)
+        elif self.type == 'trk':
+            data_struct['meta'] = copy.deepcopy(self.meta)
+            data_struct['waypoints'] = copy.deepcopy(self.waypoints)
+            data_struct['segments'] = copy.deepcopy(self.segments)
+        elif self.type == 'ldk':
+            data_struct['root'] = copy.deepcopy(self.root_node_ldk)
+
+        return data_struct
+
+    def _unpack_data(self, fmt_char, length=None):
+        if self.rawoffs >= self.rawsize and fmt_char != 'int+raw_base64':
+            if (fmt_char == 'string' and length == 0) or \
+                    (fmt_char == 'bin' and length == 0) or \
+                    (fmt_char == 'raw_base64' and length == 0):
+                pass
+            else:
+                self.debug("Немає більше '%s' даних на зміщенні 0x%04x/0x%04x!", fmt_char, self.rawoffs, self.rawsize)
+                return None
+
+        original_offset = self.rawoffs
+        value = None
+        raw_bytes_read = b''
+
+        type_map = {
+            'int': (4, '>l'), 'bool': (1, '>b'), 'byte': (1, '>b'),
+            'long': (8, '>q'), 'pointer': (8, '>Q'), 'double': (8, '>d')
+        }
+
+        if fmt_char in type_map:
+            size, struct_fmt = type_map[fmt_char]
+            if self.rawoffs + size > self.rawsize:
+                self.debug("Недостатньо даних для '%s' на 0x%04x (потрібно %d, є %d)", fmt_char, self.rawoffs, size,
+                           self.rawsize - self.rawoffs)
+                return None
+            raw_bytes_read = self.rawdata[self.rawoffs: self.rawoffs + size]
+            value = struct.unpack(struct_fmt, raw_bytes_read)[0]
+            self.rawoffs += size
+        elif fmt_char == 'string':
+            if length is None:
+                self.warning("Для типу 'string' потрібна довжина!")
+                return None
+            if length == 0:
+                value = ""
+                raw_bytes_read = b""
+            else:
+                if self.rawoffs + length > self.rawsize:
+                    self.debug("Недостатньо даних для 'string' довжиною %d на 0x%04x", length, self.rawoffs)
+                    return None
+                raw_bytes_read = self.rawdata[self.rawoffs: self.rawoffs + length]
+                try:
+                    value = raw_bytes_read.decode('utf-8')
+                except UnicodeDecodeError:
+                    self.warning("Помилка декодування UTF-8 для рядка на 0x%04x, використовую latin-1", original_offset)
+                    value = raw_bytes_read.decode('latin-1', errors='replace')
+                self.rawoffs += length
+        elif fmt_char == 'bin':
+            if length is None:
+                self.warning("Для типу 'bin' потрібна довжина!")
+                return None
+            if self.rawoffs + length > self.rawsize:
+                self.debug("Недостатньо даних для 'bin' довжиною %d на 0x%04x", length, self.rawoffs)
+                return None
+            raw_bytes_read = self.rawdata[self.rawoffs: self.rawoffs + length]
+            value = raw_bytes_read
+            self.rawoffs += length
+        elif fmt_char == 'raw_base64':
+            if length is None:
+                self.warning("Для типу 'raw_base64' потрібна довжина!")
+                return None
+            if self.rawoffs + length > self.rawsize:
+                self.debug("Недостатньо даних для 'raw_base64' довжиною %d на 0x%04x", length, self.rawoffs)
+                return None
+            raw_bytes_read = self.rawdata[self.rawoffs: self.rawoffs + length]
+            value = base64.b64encode(raw_bytes_read).decode('ascii')
+            self.rawoffs += length
+        elif fmt_char == 'int+raw_base64':
+            size = self._unpack_data('int')
+            if size is None: return None
+            if size < 0:
+                self.warning("Негативний розмір (%d) для 'int+raw_base64'", size)
+                return None
+            value = self._unpack_data('raw_base64', size)
+        elif fmt_char == 'coordinate':
+            val_int = self._unpack_data('int')
+            if val_int is None: return None
+            value = val_int * 1e-7
+        elif fmt_char == 'height':
+            val_int = self._unpack_data('int')
+            if val_int is None: return None
+            value = None if val_int == -999999999 else val_int * 1e-3
+        elif fmt_char == 'timestamp':
+            val_long = self._unpack_data('long')
+            if val_long is None: return None
+            value = None if val_long == 0 else val_long * 1e-3
+        elif fmt_char == 'accuracy':
+            val_int = self._unpack_data('int')
+            if val_int is None: return None
+            value = None if val_int == 0 else val_int
+        elif fmt_char == 'accuracy2':
+            val_int = self._unpack_data('int')
+            if val_int is None: return None
+            value = None if val_int == 0 else val_int * 1e-2
+        elif fmt_char == 'pressure':
+            val_int = self._unpack_data('int')
+            if val_int is None: return None
+            value = None if val_int == 999999999 else val_int * 1e-3
+        else:
+            self.warning("Невідомий тип для _unpack_data: '%s'", fmt_char)
+            return None
+
+        if len(raw_bytes_read) > 0 or (fmt_char == 'string' and length == 0):
+            hex_str = ' '.join(f"{b:02x}" for b in raw_bytes_read)
+            display_val = '<...>' if fmt_char in ['bin', 'raw_base64'] and value else \
+                (str(value) if value is not None else '<undef>')
+            self.trace('%-16s на 0x%04x (%04d) [%02d] %s = %s', fmt_char, original_offset, original_offset,
+                       len(raw_bytes_read), hex_str, display_val)
+
+        return value
+
+    def _unpack_multi(self, **kwargs):
+        data = {'_order': list(kwargs.keys())}
+        for key, type_info in kwargs.items():
+            length = None
+            fmt_char_actual = type_info
+            if isinstance(type_info, tuple):
+                fmt_char_actual, length = type_info
+
+            val = self._unpack_data(fmt_char_actual, length)
+            data[key] = val
+            if val is None and fmt_char_actual not in ['height', 'timestamp', 'accuracy', 'accuracy2', 'pressure',
+                                                       'string', 'raw_base64', 'bin', 'int+raw_base64']:
+                self.warning("Не вдалося прочитати обов'язкове поле '%s' (тип %s) в _unpack_multi на 0x%04x", key,
+                             fmt_char_actual, self.rawoffs)
+
+        debug_str_parts = []
+        for key_ordered in data['_order']:
+            val_str = str(data[key_ordered]) if data[key_ordered] is not None else '<undef>'
+            if len(val_str) > 50: val_str = val_str[:47] + "..."
+            debug_str_parts.append(f"{key_ordered}={val_str}")
+        self.debug(' '.join(debug_str_parts))
+        return data
+
+    def _check_header(self, *expected_versions):
+        file_version = self._unpack_data('int')
+        if file_version is None: return None
+
+        if (file_version & 0x50500000) == 0x50500000:
+            file_version = (file_version & 0xff) + 100
+
+        header_size = self._unpack_data('int')
+        if header_size is None: return None
+        if header_size < 0:
+            self.warning("Негативний розмір заголовка: %d", header_size)
+            return None
+
+        self.debug('fileVersion=%s headerSize=%s', file_version, header_size)
+        if file_version not in expected_versions:
+            self.warning('Невідома версія файлу %s (очікувалося %s).', file_version,
+                         ' або '.join(map(str, expected_versions)))
+            return None
+        self.version = file_version
+        return header_size
+
+    def _get_metadata(self, existing_meta=None):
+        meta_version = 1
+        if self.version > 100:
+            meta_version = 3
+        elif self.type == 'trk':
+            meta_version = 2 if self.version == 3 else 1
+        else:
+            meta_version = 2 if self.version == 2 else 1
+
+        num_meta_entries = self._unpack_data('int')
+        if num_meta_entries is None: return None
+        self.debug('numMetaEntries=%d metadataVersion=%s', num_meta_entries, meta_version)
+
+        meta = existing_meta if existing_meta is not None else {'_order': [], '_types': {}}
+
+        for _ in range(max(0, num_meta_entries)):
+            name_len = self._unpack_data('int')
+            if name_len is None or name_len < 0:
+                self.warning("Некоректна довжина імені метаданих: %s", name_len)
+                return None
+            name = self._unpack_data('string', name_len)
+            if name is None: return None
+
+            data_len_or_type = self._unpack_data('int')
+            if data_len_or_type is None: return None
+
+            value = None
+            data_type_str = 'unknown'
+
+            if data_len_or_type == -1:
+                data_type_str = 'bool'
+                value = self._unpack_data('bool')
+            elif data_len_or_type == -2:
+                data_type_str = 'long'
+                value = self._unpack_data('long')
+            elif data_len_or_type == -3:
+                data_type_str = 'double'
+                value = self._unpack_data('double')
+            elif data_len_or_type == -4:
+                data_type_str = 'int+raw_base64'
+                value = self._unpack_data('int+raw_base64')
+            elif data_len_or_type >= 0:
+                data_type_str = 'string'
+                value = self._unpack_data('string', data_len_or_type)
+            else:
+                self.warning('Невідомий тип метаданих %d для "%s".', data_len_or_type, name)
+                return None
+
+            meta[name] = value
+            if name not in meta['_order']: meta['_order'].append(name)
+            meta['_types'][name] = data_type_str
+
+        if meta_version == 3 and num_meta_entries >= 0:
+            dummy_int_after_meta = self._unpack_data('int')
+            if dummy_int_after_meta is None and self.rawoffs < self.rawsize:
+                self.warning("Не вдалося прочитати dummy int після метаданих v3")
+
+        if meta_version >= 2:
+            num_meta_ext = self._unpack_data('int')
+            if num_meta_ext is None: return None
+            self.debug('numMetaExt=%d', num_meta_ext)
+            if num_meta_ext > 0:
+                self.warning("Розширені метадані (%d записів) не реалізовані. Подальший розбір може бути невірним.",
+                             num_meta_ext)
+
+        for key in meta.get('_order', []):
+            self.debug('meta: %-15s (%-10s) = %s', key, meta['_types'].get(key, '?'), meta.get(key, '<undef>'))
+        return meta
+
+    def _get_location(self):
+        loc_version = 2 if self.version > 100 else 1
+
+        location = {
+            'lat': None, 'lon': None, 'alt': None, 'ts': None, 'acc': None, 'bar': None,
+            'batt': None, 'cell': {}, 'numsv': {'tot': 0}
+        }
+
+        original_rawoffs_loc_block_start = self.rawoffs
+
+        struct_size_field = self._unpack_data('int')
+        if struct_size_field is None: return None
+        if struct_size_field < 0:
+            self.warning("Негативний розмір блоку локації: %d", struct_size_field)
+            return None
+
+        expected_data_bytes_after_lonlat = struct_size_field - 8
+        if expected_data_bytes_after_lonlat < 0:
+            self.warning("Некоректний розмір блоку локації (%d), менше ніж потрібно для lon/lat.", struct_size_field)
+            return None
+
+        location['lon'] = self._unpack_data('coordinate')
+        location['lat'] = self._unpack_data('coordinate')
+        if location['lon'] is None or location['lat'] is None: return None
+
+        bytes_consumed_for_values = 0
+
+        if loc_version == 1:
+            if expected_data_bytes_after_lonlat >= 4:
+                location['alt'] = self._unpack_data('height');
+                bytes_consumed_for_values += 4
+            if expected_data_bytes_after_lonlat >= 4 + 8:
+                location['ts'] = self._unpack_data('timestamp');
+                bytes_consumed_for_values += 8
+            if expected_data_bytes_after_lonlat >= 4 + 8 + 4:
+                location['acc'] = self._unpack_data('accuracy');
+                bytes_consumed_for_values += 4
+            if expected_data_bytes_after_lonlat >= 4 + 8 + 4 + 4:
+                location['bar'] = self._unpack_data('pressure');
+                bytes_consumed_for_values += 4
+
+        else:  # loc_version == 2
+            while bytes_consumed_for_values < expected_data_bytes_after_lonlat:
+                if self.rawoffs >= self.rawsize: break
+
+                val_type_byte = self._unpack_data('byte')
+                if val_type_byte is None: break
+                bytes_consumed_for_values += 1
+
+                val_handlers = {
+                    0x61: ('accuracy2', 4, 'acc'), 0x65: ('height', 4, 'alt'),
+                    0x70: ('pressure', 4, 'bar'), 0x74: ('timestamp', 8, 'ts'),
+                    0x62: ('byte', 1, 'batt'), 0x76: ('accuracy2', 4, 'acc_v'),
+                }
+
+                if val_type_byte in val_handlers:
+                    fmt, size_of_val, key = val_handlers[val_type_byte]
+                    if bytes_consumed_for_values + size_of_val > expected_data_bytes_after_lonlat: break
+                    location[key] = self._unpack_data(fmt)
+                    if location[key] is None and fmt not in ['height', 'timestamp', 'accuracy', 'accuracy2',
+                                                             'pressure']:
+                        self.warning("Не вдалося прочитати значення для локації типу 0x%02x", val_type_byte)
+                        break
+                    bytes_consumed_for_values += size_of_val
+                elif val_type_byte == 0x6e:
+                    if bytes_consumed_for_values + 2 > expected_data_bytes_after_lonlat: break
+                    gen_prot = self._unpack_data('byte')
+                    sig_val = self._unpack_data('byte')
+                    if gen_prot is not None:
+                        location['cell']['gen'] = gen_prot // 10
+                        location['cell']['prot'] = gen_prot % 10
+                    if sig_val is not None: location['cell']['sig'] = sig_val
+                    bytes_consumed_for_values += 2
+                elif val_type_byte == 0x73:
+                    if bytes_consumed_for_values + 8 > expected_data_bytes_after_lonlat: break
+                    sats_keys = ['unkn', 'G', 'S', 'R', 'J', 'C', 'E', 'I']
+                    sats_vals = {}
+                    valid_read = True
+                    for skey in sats_keys:
+                        s_val = self._unpack_data('byte')
+                        if s_val is None: valid_read = False; break
+                        sats_vals[skey] = s_val
+                    if not valid_read: break
+
+                    location['numsv'] = {k: v for k, v in sats_vals.items() if v is not None}
+                    location['numsv']['tot'] = sum(v for v in location['numsv'].values() if isinstance(v, int))
+                    bytes_consumed_for_values += 8
+                else:
+                    self.warning("Невідомий тип значення локації v2: 0x%02x. Поточний зсув 0x%04x", val_type_byte,
+                                 self.rawoffs - 1)
+                    bytes_to_skip_in_loc_values = expected_data_bytes_after_lonlat - bytes_consumed_for_values
+                    if bytes_to_skip_in_loc_values > 0:
+                        if self.rawoffs + bytes_to_skip_in_loc_values <= self.rawsize:
+                            self.debug("Пропускаю %d невідомих байт у значеннях локації v2",
+                                       bytes_to_skip_in_loc_values)
+                            self.rawoffs += bytes_to_skip_in_loc_values
+                        else:
+                            self.rawoffs = self.rawsize
+                    break
+
+        total_block_size_as_per_field = 4 + 8 + struct_size_field
+        current_block_read_size = self.rawoffs - original_rawoffs_loc_block_start
+
+        if current_block_read_size < total_block_size_as_per_field:
+            bytes_to_skip_to_align = total_block_size_as_per_field - current_block_read_size
+            if self.rawoffs + bytes_to_skip_to_align <= self.rawsize:
+                self.debug("Пропуск %d байт для вирівнювання кінця блоку локації (struct_size_field=%d)",
+                           bytes_to_skip_to_align, struct_size_field)
+                self.rawoffs += bytes_to_skip_to_align
+            else:
+                self.debug(
+                    "Недостатньо даних для вирівнювання кінця блоку локації, можливо, struct_size_field був некоректний.")
+        elif current_block_read_size > total_block_size_as_per_field:
+            self.warning(
+                "Прочитано більше байт (%d) для блоку локації, ніж вказано у struct_size_field (%d -> total %d). Можлива розсинхронізація.",
+                current_block_read_size, struct_size_field, total_block_size_as_per_field)
+
+        for key in list(location.keys()):
+            if location[key] is None:
+                del location[key]
+            elif isinstance(location[key], dict):
+                sub_dict = location[key]
+                for sub_key in list(sub_dict.keys()):
+                    if sub_dict[sub_key] is None: del sub_dict[sub_key]
+                if not sub_dict: del location[key]
+
+        self.debug('location: %s',
+                   {k: v for k, v in location.items() if v is not None and (not isinstance(v, dict) or v)})
+        return location
+
+    def _get_waypoints(self):
+        num_waypoints = self._unpack_data('int')
+        if num_waypoints is None or num_waypoints < 0:
+            self.warning("Некоректна кількість точок: %s", num_waypoints)
+            return False
+        self.debug('numWaypoints=%s', num_waypoints)
+        if num_waypoints == 0:
+            self.debug("Файл не містить точок (waypoints).")  # Додано логування
+
+        waypoints_list = []
+        for i in range(num_waypoints):
+            meta = self._get_metadata()
+            loc = self._get_location()
+            if meta is None or loc is None:
+                self.warning("Помилка розбору точки %d (метадані або локація відсутні)", i)
+                return False
+            waypoints_list.append({'meta': meta, 'location': loc})
+        self.waypoints = waypoints_list
+        return True
+
+    def _get_locations_list(self):
+        num_locations = self._unpack_data('int')
+        if num_locations is None or num_locations < 0:
+            self.warning("Некоректна кількість локацій: %s", num_locations)
+            return None
+        self.debug('numLocations (for area/segment)=%s', num_locations)
+        if num_locations == 0:
+            self.debug("Список локацій порожній (numLocations=0).")  # Додано логування
+
+        locations_list = []
+        for i in range(num_locations):
+            loc = self._get_location()
+            if loc is None:
+                self.warning("Помилка розбору локації %d для області/сегменту", i)
+                return None
+            locations_list.append(loc)
+        return locations_list
+
+    def _get_segments(self):
+        num_segments = self._unpack_data('int')
+        if num_segments is None or num_segments < 0:
+            self.warning("Некоректна кількість сегментів: %s", num_segments)
+            return False
+        self.debug('numSegments=%s', num_segments)
+        if num_segments == 0:
+            self.debug("Файл не містить сегментів (numSegments=0).")  # Додано логування
+
+        segments_list = []
+        for i in range(num_segments):
+            segment_has_meta = (self.version >= 100) or (self.version == 3 and self.type == 'trk')
+
+            segment_meta = {}
+            if segment_has_meta:
+                segment_meta = self._get_metadata()
+                if segment_meta is None:
+                    self.warning("Помилка розбору метаданих сегмента %d", i)
+                    return False
+            elif self.type == 'trk' and self.version < 3 and self.version < 100:
+                dummy_int = self._unpack_data('int')
+                if dummy_int is None and self.rawoffs < self.rawsize:
+                    self.warning("Не вдалося прочитати dummy int для старого сегмента треку")
+
+            locations_in_segment = self._get_locations_list()
+            if locations_in_segment is None:
+                self.warning("Помилка розбору локацій для сегмента %d", i)
+                return False
+
+            if segment_has_meta and segment_meta:
+                segments_list.append({'meta': segment_meta, 'locations': locations_in_segment})
+            else:
+                segments_list.append(locations_in_segment)
+        self.segments = segments_list
+        return True
+
+    def _parse_wpt(self):
+        header_size = self._check_header(2, 101)
+        if header_size is None: return False
+        if self.rawoffs + header_size > self.rawsize:
+            self.warning("Розмір заголовка (%d) перевищує доступні дані (%d) для WPT", header_size,
+                         self.rawsize - self.rawoffs)
+            return False
+        self.rawoffs += header_size
+
+        self.meta = self._get_metadata()
+        if self.meta is None: return False
+        self.location = self._get_location()
+        return bool(self.location)
+
+    def _parse_set(self):
+        header_size = self._check_header(2, 101)
+        if header_size is None: return False
+        if self.version < 100:
+            if self.rawoffs + header_size > self.rawsize:
+                self.warning("Розмір заголовка (%d) перевищує доступні дані (%d) для SET/RTE (legacy)", header_size,
+                             self.rawsize - self.rawoffs)
+                return False
+            self.rawoffs += header_size
+
+        if self.version > 100:
+            tech_meta = self._get_metadata()
+            if tech_meta is None: return False
+        self.meta = self._get_metadata()
+        if self.meta is None: return False
+
+        return self._get_waypoints()
+
+    def _parse_rte(self):
+        return self._parse_set()
+
+    def _parse_are(self):
+        header_size = self._check_header(2)
+        if header_size is None: return False
+        if self.rawoffs + header_size > self.rawsize:
+            self.warning("Розмір заголовка (%d) перевищує доступні дані (%d) для ARE", header_size,
+                         self.rawsize - self.rawoffs)
+            return False
+        self.rawoffs += header_size
+
+        self.meta = self._get_metadata()
+        if self.meta is None: return False
+
+        parsed_locations = self._get_locations_list()
+        if parsed_locations is None: return False
+        self.locations = parsed_locations
+        return True
+
+    def _parse_trk(self):
+        header_size = self._check_header(2, 3, 101)
+        if header_size is None: return False
+        if self.version < 100:
+            if self.rawoffs + header_size > self.rawsize:
+                self.warning("Розмір заголовка (%d) перевищує доступні дані (%d) для TRK (legacy)", header_size,
+                             self.rawsize - self.rawoffs)
+                return False
+            self.rawoffs += header_size
+
+        if self.version > 100:
+            tech_meta = self._get_metadata()
+            if tech_meta is None: return False
+        self.meta = self._get_metadata()
+        if self.meta is None: return False
+
+        if not self._get_waypoints(): return False
+        if not self._get_segments(): return False
+        return True
+
+    def _parse_ldk(self):
+        hdr = self._unpack_multi(magic='int', archVersion='int', rootOffset='pointer',
+                                 res1='long', res2='long', res3='long', res4='long')
+        if not hdr or hdr.get('res4') is None:
+            self.error("Не вдалося прочитати заголовок LDK.")
+            return False
+
+        expected_magic = 0x4c444b3a
+        if hdr['magic'] != expected_magic:
+            self.warning('Невідомий magic LDK 0x%08x (очікувався 0x%08x).', hdr['magic'], expected_magic)
+            return False
+        expected_arch_version = 1
+        if hdr['archVersion'] != expected_arch_version:
+            self.warning('Невідома версія архіву LDK %d (очікувалася %d).', hdr['archVersion'], expected_arch_version)
+            return False
+
+        self.root_node_ldk = self._get_ldk_node(hdr['rootOffset'])
+        if self.verbosity >= 1 and self.root_node_ldk:
+            self._debug_dump_ldk_node(self.root_node_ldk)
+        return bool(self.root_node_ldk)
+
+    def _get_ldk_node(self, offset, current_path="/"):
+        call_entry_rawoffs = self.rawoffs
+        self.rawoffs = offset
+        self.debug('***** LDK вузол на 0x%04x (шлях: %s) *****', offset, current_path)
+
+        hdr = self._unpack_multi(magic='int', flags='int', metaOffset='pointer', res1='long')
+        if not hdr or hdr.get('res1') is None:
+            self.warning("Не вдалося прочитати заголовок LDK вузла на 0x%04x", offset)
+            self.rawoffs = call_entry_rawoffs;
+            return None
+
+        expected_magic = 0x00015555
+        if hdr['magic'] != expected_magic:
+            self.warning('Невідомий magic LDK вузла 0x%08x (очікувався 0x%08x) на 0x%04x.', hdr['magic'],
+                         expected_magic, offset)
+            self.rawoffs = call_entry_rawoffs;
+            return None
+
+        rawoffs_after_node_header = self.rawoffs
+
+        self.rawoffs = hdr['metaOffset'] + 0x20
+        node_meta = self._get_metadata()
+        if node_meta is None:
+            self.warning("Не вдалося прочитати метадані для LDK вузла на 0x%04x (metaOffset 0x%04x)", offset,
+                         hdr['metaOffset'])
+            self.rawoffs = call_entry_rawoffs;
+            return None
+
+        self.rawoffs = rawoffs_after_node_header
+
+        node_name_from_meta = node_meta.get('name', '')
+        node_path_segment = node_name_from_meta if node_name_from_meta else f"node_at_0x{offset:04x}"
+
+        new_full_path = current_path
+        if not new_full_path.endswith('/'): new_full_path += '/'
+        new_full_path += node_path_segment
+        if not new_full_path.endswith('/'): new_full_path += '/'
+
+        node_data_struct = {'path': new_full_path, 'meta': node_meta, 'files': [], 'nodes': []}
+
+        entries_magic = self._unpack_data('int')
+        if entries_magic is None: self.rawoffs = call_entry_rawoffs; return None
+        self.debug('path=%s nodeEntriesMagic=0x%08x', new_full_path, entries_magic)
+
+        num_child_nodes = 0
+        num_data_entries = 0
+        num_empty_entries = 0
+
+        if entries_magic == 0x00025555:
+            list_hdr = self._unpack_multi(nTotal='int', nChild='int', nData='int', addOffset='pointer')
+            if not list_hdr or list_hdr.get('addOffset') is None: self.rawoffs = call_entry_rawoffs; return None
+            num_child_nodes = list_hdr['nChild'] if list_hdr['nChild'] is not None else 0
+            num_data_entries = list_hdr['nData'] if list_hdr['nData'] is not None else 0
+            if list_hdr['nTotal'] is not None:
+                num_empty_entries = list_hdr['nTotal'] - num_child_nodes - num_data_entries
+            else:
+                self.warning("Не вдалося прочитати nTotal для LDK NodeEntriesAsList")
+                self.rawoffs = call_entry_rawoffs;
+                return None
+        elif entries_magic == 0x00045555:
+            table_hdr = self._unpack_multi(nChild='int', nData='int')
+            if not table_hdr: self.rawoffs = call_entry_rawoffs; return None
+            num_child_nodes = table_hdr['nChild'] if table_hdr['nChild'] is not None else 0
+            num_data_entries = table_hdr['nData'] if table_hdr['nData'] is not None else 0
+        else:
+            self.warning('Невідомий magic для записів LDK вузла 0x%08x.', entries_magic)
+            self.rawoffs = call_entry_rawoffs;
+            return None
+
+        child_node_descriptors = []
+        for i in range(num_child_nodes):
+            entry = self._unpack_multi(offset='pointer', uid='int')
+            if not entry or entry.get('uid') is None: self.rawoffs = call_entry_rawoffs; return None
+            entry['_order_idx'] = i
+            child_node_descriptors.append(entry)
+
+        if num_empty_entries < 0:
+            self.warning("Негативна кількість порожніх записів LDK: %d. Встановлено в 0.", num_empty_entries)
+            num_empty_entries = 0
+        self.rawoffs += num_empty_entries * (8 + 4)
+
+        data_file_descriptors = []
+        for i in range(num_data_entries):
+            entry = self._unpack_multi(offset='pointer', uid='int')
+            if not entry or entry.get('uid') is None: self.rawoffs = call_entry_rawoffs; return None
+            entry['_order_idx'] = i
+            data_file_descriptors.append(entry)
+
+        for entry_desc in sorted(child_node_descriptors, key=lambda x: x['_order_idx']):
+            child_node_obj = self._get_ldk_node(entry_desc['offset'], new_full_path)
+            if child_node_obj:
+                node_data_struct['nodes'].append(child_node_obj)
+            else:
+                self.warning("Не вдалося розібрати дочірній LDK вузол на 0x%04x", entry_desc['offset'])
+
+        type_map_ldk_ext = {0x65: 'wpt', 0x66: 'set', 0x67: 'rte', 0x68: 'trk', 0x69: 'are'}
+        for entry_desc in sorted(data_file_descriptors, key=lambda x: x['_order_idx']):
+            file_bytes = self._get_ldk_data_block(entry_desc['offset'])
+            if file_bytes and len(file_bytes) > 0:
+                file_type_byte_val = file_bytes[0]
+                actual_data_bytes = file_bytes[1:]
+                file_extension = type_map_ldk_ext.get(file_type_byte_val, 'bin')
+
+                ldk_file_basename = os.path.basename(self.path).rsplit('.', 1)[0]
+                current_node_path_str = new_full_path.strip('/').replace('/', '_').replace('\\', '_')
+
+                unique_file_name = f"{ldk_file_basename}"
+                if current_node_path_str and current_node_path_str != f"node_at_0x{offset:04x}":
+                    unique_file_name += f"_{current_node_path_str}"
+                unique_file_name += f"_UID{entry_desc['uid']:08X}.{file_extension}"
+
+                node_data_struct['files'].append({
+                    'name': unique_file_name,
+                    'type': file_extension,
+                    'size': len(actual_data_bytes),
+                    'data_base64': base64.b64encode(actual_data_bytes).decode('ascii'),
+                    'order': entry_desc['_order_idx']
+                })
+            elif file_bytes is None:
+                self.warning("Не вдалося прочитати блок даних файлу LDK на 0x%04x", entry_desc['offset'])
+
+        self.rawoffs = call_entry_rawoffs
+        return node_data_struct
+
+    def _get_ldk_data_block(self, offset):
+        original_rawoffs_for_block = self.rawoffs
+        self.rawoffs = offset
+
+        hdr = self._unpack_multi(magic='int', flags='int', totalSize='long', size='long', addOffset='pointer')
+        if not hdr or hdr.get('addOffset') is None:
+            self.warning("Не вдалося прочитати заголовок блоку даних LDK на 0x%04x", offset)
+            self.rawoffs = original_rawoffs_for_block;
+            return None
+
+        expected_magic = 0x00105555
+        if hdr['magic'] != expected_magic:
+            self.warning('Неправильний magic для LDK блоку даних 0x%08x (очікувався 0x%08x) на 0x%04x.',
+                         hdr['magic'], expected_magic, offset)
+            self.rawoffs = original_rawoffs_for_block;
+            return None
+
+        if hdr['size'] < 0:
+            self.warning("Негативний розмір даних (%d) у LDK блоці на 0x%04x", hdr['size'], offset)
+            self.rawoffs = original_rawoffs_for_block;
+            return None
+
+        main_data_content = self._unpack_data('bin', hdr['size'])
+        if main_data_content is None:
+            self.warning("Не вдалося прочитати основні дані LDK блоку на 0x%04x", offset)
+            self.rawoffs = original_rawoffs_for_block;
+            return None
+
+        accumulated_data = [main_data_content]
+        current_additional_offset = hdr['addOffset']
+
+        visited_offsets = {offset, current_additional_offset}
+
+        while current_additional_offset != 0:
+            self.rawoffs = current_additional_offset
+
+            add_hdr = self._unpack_multi(magic='int', size='long', addOffset='pointer')
+            if not add_hdr or add_hdr.get('addOffset') is None:
+                self.warning("Не вдалося прочитати заголовок додаткового блоку LDK на 0x%04x",
+                             current_additional_offset)
+                self.rawoffs = original_rawoffs_for_block;
+                return None
+
+            expected_add_magic = 0x00205555
+            if add_hdr['magic'] != expected_add_magic:
+                self.warning('Неправильний magic для додаткового LDK блоку 0x%08x (очікувався 0x%08x) на 0x%04x.',
+                             add_hdr['magic'], expected_add_magic, current_additional_offset)
+                self.rawoffs = original_rawoffs_for_block;
+                return None
+
+            if add_hdr['size'] < 0:
+                self.warning("Негативний розмір даних (%d) у додатковому LDK блоці на 0x%04x", add_hdr['size'],
+                             current_additional_offset)
+                self.rawoffs = original_rawoffs_for_block;
+                return None
+
+            additional_block_bytes = self._unpack_data('bin', add_hdr['size'])
+            if additional_block_bytes is None:
+                self.warning("Не вдалося прочитати дані додаткового LDK блоку на 0x%04x", current_additional_offset)
+                self.rawoffs = original_rawoffs_for_block;
+                return None
+
+            accumulated_data.append(additional_block_bytes)
+            current_additional_offset = add_hdr['addOffset']
+
+            if current_additional_offset in visited_offsets and current_additional_offset != 0:
+                self.warning("Виявлено цикл у додаткових блоках LDK даних на зміщенні 0x%04x. Перериваю.",
+                             current_additional_offset)
+                break
+            visited_offsets.add(current_additional_offset)
+
+        self.rawoffs = original_rawoffs_for_block
+        return b"".join(accumulated_data)
+
+    def _debug_dump_ldk_node(self, node, indent=0):
+        if not node: return
+        prefix = "  " * indent
+        self.debug("%sШлях вузла: %s", prefix, node.get('path'))
+        node_meta = node.get('meta', {})
+        if node_meta:
+            display_meta = {k: v for k, v in node_meta.items() if k not in ['_order', '_types']}
+            if display_meta:
+                self.debug("%s  Мета: %s", prefix, display_meta)
+
+        for f_info in node.get('files', []):
+            self.debug("%s  Файл: %s (тип: %s, розмір: %d, порядок: %s)",
+                       prefix, f_info.get('name'), f_info.get('type'), f_info.get('size'), f_info.get('order', 'N/A'))
+        for child_node in node.get('nodes', []):
+            self._debug_dump_ldk_node(child_node, indent + 1)
+
+
+# --- Додаток: apq2csv ---
+class AppApqToCsv(Base):
+    def __init__(self, args_list, verbosity=0, use_colors=None, gui_log_widget=None):
+        super().__init__(verbosity, use_colors, gui_log_widget)
+        parser = argparse.ArgumentParser(prog="apqtool.py apq2csv", description="Конвертер файлів AlpineQuest у CSV.",
+                                         add_help=False)
+        parser.add_argument('-h', '--help', action='store_true', help="Показати це повідомлення допомоги та вийти.")
+        parser.add_argument('-v', '--verbose', action='count', default=0,
+                            help="Збільшити детальність виводу (-vv для більшої).")
+        parser.add_argument('-q', '--quiet', action='store_true', help="Тихий режим (менше виводу).")
+        parser.add_argument('-o', '--outfile', help="Вихідний CSV файл (або '-' для stdout).")
+        parser.add_argument('-f', '--force', action='store_true', help="Перезаписати вихідний файл, якщо він існує.")
+        parser.add_argument('infiles', nargs='*', help="Один або більше вхідних файлів AlpineQuest.")
+
+        try:
+            self.args = parser.parse_args(args_list)
+        except SystemExit:
+            self.args = None
+            return
+
+        if self.args.help:
+            self.help('apq2csv')
+            self.args = None
+            return
+
+        if self.args:
+            if self.args.quiet:
+                self.verbosity = -1
+            else:
+                self.verbosity = self.args.verbose
+            super().__init__(self.verbosity, use_colors, gui_log_widget)
+
+            if not self.args.infiles:
+                self.error("Не вказано вхідні файли.")
+                self.help('apq2csv')
+                self.args = None
+                return
+
+            if not self.args.outfile:
+                self.error("Вихідний файл не вказано! Використовуйте -o <file.csv>")
+                self.help('apq2csv')
+                self.args = None
+                return
+
+            if self.args.outfile != '-':
+                for infile_path in self.args.infiles:
+                    try:
+                        if os.path.exists(self.args.outfile) and os.path.exists(infile_path) and \
+                                os.path.samefile(os.path.abspath(self.args.outfile), os.path.abspath(infile_path)):
+                            self.error("Вихідний файл '%s' не може бути таким самим, як вхідний файл '%s'.",
+                                       self.args.outfile, infile_path)
+                            self.args = None
+                            return
+                    except FileNotFoundError:
+                        pass
+                    except Exception as e:
+                        self.warning("Помилка при перевірці шляхів файлів: %s", e)
+
+    def run(self):
+        if not self.args:
+            return True
+
+        self.trace('run() AppApqToCsv')
+
+        if self.args.outfile != '-' and os.path.exists(self.args.outfile) and not self.args.force:
+            self.error("Вихідний файл '%s' вже існує. Використовуйте -f для перезапису.", self.args.outfile)
+            return False
+
+        csv_header = [
+            'type', 'source_file', 'item_name', 'item_comment', 'item_description', 'item_sym', 'item_url',
+            'lat', 'lon', 'ele', 'timestamp_utc',
+            'segment_id', 'point_id',
+            'point_accuracy', 'point_pressure', 'point_battery',
+            'point_cell_gen', 'point_cell_prot', 'point_cell_sig',
+            'point_sat_total', 'point_sat_g', 'point_sat_s', 'point_sat_r',
+            'point_sat_j', 'point_sat_c', 'point_sat_e', 'point_sat_i', 'point_sat_unkn'
+        ]
+
+        output_errors = 0
+        total_data_rows_written = 0  # Лічильник для рядків даних
+
+        out_stream = None
+        csv_writer_obj = None
+
+        try:
+            if self.args.outfile == '-':
+                out_stream = sys.stdout
+                if os.name == 'nt':
+                    sys.stdout.reconfigure(encoding='utf-8')
+                csv_writer_obj = csv.writer(out_stream, lineterminator='\n')
+            else:
+                out_stream = open(self.args.outfile, 'w', newline='', encoding='utf-8')
+                csv_writer_obj = csv.writer(out_stream)
+
+            csv_writer_obj.writerow(csv_header)
+
+            for filepath in self.args.infiles:
+                self.print_out("Обробка: %s", filepath)
+                try:
+                    apq_data_obj = ApqFile(path=filepath, verbosity=self.verbosity,
+                                           use_colors=self.use_colors, gui_log_widget=self.gui_log_widget)
+
+                    items_to_process = []
+                    if apq_data_obj.type == 'ldk' and apq_data_obj.root_node_ldk:
+                        items_to_process = self._load_nodes_from_ldk_recursive(apq_data_obj.root_node_ldk, filepath)
+                    elif apq_data_obj.type != 'ldk' and apq_data_obj.rawdata:
+                        items_to_process.append(apq_data_obj.get_data_structure())
+                    elif apq_data_obj.type == 'ldk' and not apq_data_obj.root_node_ldk:
+                        self.warning("LDK файл '%s' порожній або не вдалося розібрати кореневий вузол.", filepath)
+
+                    for item_data in items_to_process:
+                        rows_written_for_item = self._data_to_csv_rows(item_data, csv_writer_obj)
+                        total_data_rows_written += rows_written_for_item
+
+                except ValueError as e:
+                    self.error("Помилка обробки файлу %s: %s", filepath, e)
+                    output_errors += 1
+                except Exception as e:
+                    self.error("Неочікувана помилка при обробці %s: %s", filepath, e)
+                    output_errors += 1
+
+            if self.args.outfile != '-':
+                self.print_out("Успішно записано CSV дані до %s", self.args.outfile)
+
+            if total_data_rows_written == 0 and output_errors == 0:  # Якщо не було помилок, але й даних не було
+                self.warning(
+                    "Жодного рядка даних не було записано у вихідний файл (окрім заголовка). Перевірте вхідні файли на наявність точок або коректність формату.")
+
+
+        except IOError as e:
+            self.error("Помилка запису у вихідний файл '%s': %s", self.args.outfile, e)
+            return False
+        finally:
+            if out_stream and self.args.outfile != '-':
+                out_stream.close()
+
+        return output_errors == 0
+
+    def _load_nodes_from_ldk_recursive(self, node, ldk_file_path):
+        all_items_data = []
+        if not node or not isinstance(node, dict):
+            self.debug("Пропуск невалідного вузла LDK: %s", node)
+            return all_items_data
+
+        for file_info in node.get('files', []):
+            self.print_out('Завантаження з LDK: %s (внутрішній шлях: %s%s)',
+                           ldk_file_path, node.get('path', ''), file_info.get('name', 'N/A'))
+            try:
+                decoded_bytes = base64.b64decode(file_info['data_base64'])
+
+                temp_apq = ApqFile(rawdata=decoded_bytes, rawname=file_info['name'],
+                                   file_type=file_info['type'],
+                                   rawts=datetime.now(timezone.utc).timestamp(),
+                                   verbosity=self.verbosity, use_colors=self.use_colors,
+                                   gui_log_widget=self.gui_log_widget)
+                all_items_data.append(temp_apq.get_data_structure())
+            except Exception as e:
+                self.warning("Не вдалося обробити файл '%s' з LDK '%s': %s", file_info.get('name', 'N/A'),
+                             ldk_file_path, e)
+
+        for child_node in node.get('nodes', []):
+            all_items_data.extend(self._load_nodes_from_ldk_recursive(child_node, ldk_file_path))
+
+        return all_items_data
+
+    def _data_to_csv_rows(self, item_data, csv_writer):
+        rows_written_count = 0
+        file_type = item_data.get('type', 'unknown')
+        source_file = item_data.get('file', 'unknown_source')
+        global_meta = copy.deepcopy(item_data.get('meta', {}))
+
+        if file_type == 'wpt':
+            loc = item_data.get('location', {})
+            if loc:  # Перевірка, чи є локація
+                row = self._format_csv_row(file_type, source_file, global_meta, loc)
+                csv_writer.writerow(row)
+                rows_written_count += 1
+        elif file_type in ['set', 'rte']:
+            point_id_counter = 0
+            for wpt_item in item_data.get('waypoints', []):
+                loc = wpt_item.get('location', {})
+                if loc:
+                    item_meta = self._merge_meta(global_meta, wpt_item.get('meta', {}))
+                    row = self._format_csv_row(file_type, source_file, item_meta, loc, None, point_id_counter + 1)
+                    csv_writer.writerow(row)
+                    rows_written_count += 1
+                    point_id_counter += 1
+        elif file_type == 'are':
+            point_id_counter = 0
+            for loc in item_data.get('locations', []):
+                if loc:
+                    row = self._format_csv_row(file_type, source_file, global_meta, loc, None, point_id_counter + 1)
+                    csv_writer.writerow(row)
+                    rows_written_count += 1
+                    point_id_counter += 1
+        elif file_type == 'trk':
+            trk_wpt_id_counter = 0
+            for trk_wpt_item in item_data.get('waypoints', []):
+                loc = trk_wpt_item.get('location', {})
+                if loc:
+                    item_meta = self._merge_meta(global_meta, trk_wpt_item.get('meta', {}))
+                    row = self._format_csv_row('trk_wpt', source_file, item_meta, loc, None, trk_wpt_id_counter + 1)
+                    csv_writer.writerow(row)
+                    rows_written_count += 1
+                    trk_wpt_id_counter += 1
+
+            segment_id_counter = 0
+            for segment in item_data.get('segments', []):
+                segment_id_counter += 1
+                point_id_counter = 0
+
+                locations_in_segment = []
+                segment_specific_meta = {}
+                if isinstance(segment, list):
+                    locations_in_segment = segment
+                elif isinstance(segment, dict):
+                    locations_in_segment = segment.get('locations', [])
+                    segment_specific_meta = segment.get('meta', {})
+
+                current_segment_meta = self._merge_meta(global_meta, segment_specific_meta)
+
+                for loc in locations_in_segment:
+                    if loc:
+                        row = self._format_csv_row(file_type, source_file, current_segment_meta, loc,
+                                                   segment_id_counter, point_id_counter + 1)
+                        csv_writer.writerow(row)
+                        rows_written_count += 1
+                        point_id_counter += 1
+        else:
+            self.debug("Тип '%s' з файлу '%s' не обробляється для CSV.", file_type, source_file)
+        return rows_written_count
+
+    def _format_csv_row(self, type_str, source_file, meta, loc, segment_id=None, point_id=None):
+        ts_epoch = loc.get('ts')
+        timestamp_iso = ''
+        if ts_epoch is not None:
+            try:
+                ts_epoch_num = float(ts_epoch)
+                if ts_epoch_num == 0:
+                    timestamp_iso = ''
+                else:
+                    dt_obj = datetime.fromtimestamp(ts_epoch_num, timezone.utc)
+                    timestamp_iso = dt_obj.isoformat(timespec='seconds').replace('+00:00', 'Z')
+            except (ValueError, TypeError, OSError) as e:
+                self.warning("Не вдалося відформатувати мітку часу '%s': %s", ts_epoch, e)
+
+        cell_info = loc.get('cell', {}) if isinstance(loc.get('cell'), dict) else {}
+        numsv_info = loc.get('numsv', {}) if isinstance(loc.get('numsv'), dict) else {}
+
+        def get_val(data_dict, key, default=''):
+            if not isinstance(data_dict, dict):
+                return default
+            val = data_dict.get(key)
+            return val if val is not None else default
+
+        return [
+            type_str or '',
+            source_file or '',
+            get_val(meta, 'name'),
+            get_val(meta, 'comment'),
+            get_val(meta, 'description'),
+            get_val(meta, 'icon', get_val(meta, 'sym')),
+            get_val(meta, 'url'),
+
+            get_val(loc, 'lat'),
+            get_val(loc, 'lon'),
+            get_val(loc, 'alt'),
+            timestamp_iso,
+
+            segment_id or '',
+            point_id or '',
+
+            get_val(loc, 'acc'),
+            get_val(loc, 'bar'),
+            get_val(loc, 'batt'),
+
+            get_val(cell_info, 'gen'),
+            get_val(cell_info, 'prot'),
+            get_val(cell_info, 'sig'),
+
+            get_val(numsv_info, 'tot'),
+            get_val(numsv_info, 'G'),
+            get_val(numsv_info, 'S'),
+            get_val(numsv_info, 'R'),
+            get_val(numsv_info, 'J'),
+            get_val(numsv_info, 'C'),
+            get_val(numsv_info, 'E'),
+            get_val(numsv_info, 'I'),
+            get_val(numsv_info, 'unkn'),
+        ]
+
+    def _merge_meta(self, global_m, item_m):
+        safe_global_m = global_m if isinstance(global_m, dict) else {}
+        safe_item_m = item_m if isinstance(item_m, dict) else {}
+
+        if not safe_item_m: return copy.deepcopy(safe_global_m)
+        if not safe_global_m: return copy.deepcopy(safe_item_m)
+
+        merged = copy.deepcopy(safe_global_m)
+        for key, value in safe_item_m.items():
+            if key not in ['_order', '_types']:
+                merged[key] = value
+        return merged
+
+
+# --- Додаток: apq2gpx ---
+class AppApqToGpx(Base):
+    def __init__(self, args_list, verbosity=0, use_colors=None, gui_log_widget=None):
+        super().__init__(verbosity, use_colors, gui_log_widget)
+        parser = argparse.ArgumentParser(prog="apqtool.py apq2gpx",
+                                         description="Конвертер файлів AlpineQuest у GPX/JSON.", add_help=False)
+        parser.add_argument('-h', '--help', action='store_true', help="Показати це повідомлення допомоги та вийти.")
+        parser.add_argument('-j', '--json', action='count', default=0, help="Генерувати JSON.")
+        parser.add_argument('-g', '--gpx', action='count', default=0,
+                            help="Генерувати GPX (за замовчуванням, якщо не вказано інше).")
+        parser.add_argument('-b', '--bin', action='store_true', help="Розпакувати вміст LDK у бінарні файли.")
+        parser.add_argument('-m', '--merge', action='store_true', help="Об'єднати всі вхідні файли.")
+        parser.add_argument('-f', '--force', action='store_true', help="Перезаписати вихідні файли.")
+        parser.add_argument('-o', '--outbase', default='',
+                            help="Базове ім'я/директорія для вихідних файлів або '-' для stdout.")
+        parser.add_argument('infiles', nargs='*', help="Вхідні файли AlpineQuest.")
+        parser.add_argument('-v', '--verbose', action='count', default=0, help="Збільшити детальність виводу.")
+        parser.add_argument('-q', '--quiet', action='store_true', help="Тихий режим.")
+
+        try:
+            self.args = parser.parse_args(args_list)
+        except SystemExit:
+            self.args = None
+            return
+
+        if self.args:
+            if self.args.help:
+                self.help('apq2gpx')
+                self.args = None;
+                return
+
+            if self.args.quiet:
+                self.verbosity = -1
+            else:
+                self.verbosity = self.args.verbose
+            super().__init__(self.verbosity, use_colors, gui_log_widget)
+
+            if not self.args.infiles:
+                self.error("Не вказано вхідні файли для apq2gpx.")
+                self.help('apq2gpx')
+                self.args = None
+                return
+
+            if not self.args.json and not self.args.gpx and not self.args.bin:
+                self.args.gpx = 1
+                self.print_out("За замовчуванням вивід у GPX (-g).")
+
+    def run(self):
+        if not self.args: return True
+
+        self.print_out("Функціонал apq2gpx на Python ще не повністю реалізований.")
+        self.trace(f"Аргументи для apq2gpx: {self.args}")
+        self.warning("Для роботи apq2gpx потрібен модуль 'gpxpy'. Встановіть його: pip install gpxpy")
+        return True
+
+
+# --- Додаток: places2apq ---
+class AppPlacesToApq(Base):
+    def __init__(self, args_list, verbosity=0, use_colors=None, gui_log_widget=None):
+        super().__init__(verbosity, use_colors, gui_log_widget)
+        parser = argparse.ArgumentParser(prog="apqtool.py places2apq",
+                                         description="Конвертер Google Places у формат AlpineQuest.", add_help=False)
+        parser.add_argument('-h', '--help', action='store_true', help="Показати це повідомлення допомоги та вийти.")
+        parser.add_argument('-s', '--setfile', help="Вихідний .SET файл (наразі не створюється).")
+        parser.add_argument('infiles', nargs='*', help="GeoJSON файли з Google Takeout.")
+        parser.add_argument('-v', '--verbose', action='count', default=0, help="Збільшити детальність виводу.")
+        parser.add_argument('-q', '--quiet', action='store_true', help="Тихий режим.")
+
+        try:
+            self.args = parser.parse_args(args_list)
+        except SystemExit:
+            self.args = None
+            return
+
+        if self.args:
+            if self.args.help:
+                self.help('places2apq')
+                self.args = None;
+                return
+
+            if self.args.quiet:
+                self.verbosity = -1
+            else:
+                self.verbosity = self.args.verbose
+            super().__init__(self.verbosity, use_colors, gui_log_widget)
+
+            if not self.args.infiles:
+                self.error("Не вказано вхідні файли для places2apq.")
+                self.help('places2apq')
+                self.args = None;
+                return
+            if not self.args.setfile:
+                self.error("Не вказано вихідний .SET файл (-s).")
+                self.help('places2apq')
+                self.args = None;
+                return
+
+    def run(self):
+        if not self.args: return True
+
+        self.print_out("Функціонал places2apq на Python ще не повністю реалізований.")
+        self.warning("Створення файлу AlpineQuest .SET з Google Places наразі не підтримується у цій Python-версії.")
+        return True
+
+
+# --- GUI ---
+class ApqToolGui:
+    def __init__(self, master):
+        self.master = master
+        master.title("AlpineQuest Tool (Python)")
+        master.geometry("700x550")
+
+        self.input_file_paths = []
+        self.output_file_path = tk.StringVar()
+        self.selected_tool = tk.StringVar(value="apq2csv")  # За замовчуванням
+        self.force_overwrite = tk.BooleanVar(value=False)
+        self.verbosity_level = tk.IntVar(value=0)  # 0=print, 1=debug, 2=trace
+
+        # Фрейм для вибору вхідних файлів
+        input_frame = tk.Frame(master, padx=5, pady=5)
+        input_frame.pack(fill=tk.X)
+        tk.Button(input_frame, text="Вибрати вхідні файли...", command=self.select_input_files).pack(side=tk.LEFT)
+        self.input_files_label = tk.Label(input_frame, text="Файли не вибрано", anchor="w", justify=tk.LEFT)
+        self.input_files_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        # Фрейм для вибору вихідного файлу
+        output_frame = tk.Frame(master, padx=5, pady=5)
+        output_frame.pack(fill=tk.X)
+        tk.Button(output_frame, text="Вибрати вихідний файл...", command=self.select_output_file).pack(side=tk.LEFT)
+        self.output_file_entry = tk.Entry(output_frame, textvariable=self.output_file_path, width=50)
+        self.output_file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        # Фрейм для опцій
+        options_frame = tk.Frame(master, padx=5, pady=5)
+        options_frame.pack(fill=tk.X)
+
+        tk.Label(options_frame, text="Інструмент:").pack(side=tk.LEFT)
+        tk.Radiobutton(options_frame, text="CSV", variable=self.selected_tool, value="apq2csv").pack(side=tk.LEFT)
+        tk.Radiobutton(options_frame, text="GPX/JSON", variable=self.selected_tool, value="apq2gpx").pack(side=tk.LEFT)
+        # tk.Radiobutton(options_frame, text="Places", variable=self.selected_tool, value="places2apq").pack(side=tk.LEFT) # Якщо потрібно
+
+        tk.Checkbutton(options_frame, text="Перезаписати вихідний", variable=self.force_overwrite).pack(side=tk.LEFT,
+                                                                                                        padx=10)
+
+        tk.Label(options_frame, text="Деталізація:").pack(side=tk.LEFT, padx=(20, 0))
+        tk.Radiobutton(options_frame, text="Звичайна", variable=self.verbosity_level, value=0).pack(side=tk.LEFT)
+        tk.Radiobutton(options_frame, text="Debug", variable=self.verbosity_level, value=1).pack(side=tk.LEFT)
+        tk.Radiobutton(options_frame, text="Trace", variable=self.verbosity_level, value=2).pack(side=tk.LEFT)
+
+        # Кнопка конвертації
+        tk.Button(master, text="КОНВЕРТУВАТИ", command=self.start_conversion, font=("Arial", 10, "bold"),
+                  bg="lightgreen").pack(pady=10)
+
+        # Текстове поле для логів
+        log_frame = tk.Frame(master, padx=5, pady=5)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+        self.log_text = scrolledtext.ScrolledText(log_frame, state='disabled', wrap=tk.WORD, height=15, width=80)
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+
+        # Зберігаємо оригінальні stdout/stderr для відновлення
+        self.orig_stdout = sys.stdout
+        self.orig_stderr = sys.stderr
+
+    def select_input_files(self):
+        # Типи файлів для діалогу
+        filetypes = (
+            ("AlpineQuest файли", "*.wpt *.set *.rte *.are *.trk *.ldk"),
+            ("Всі файли", "*.*")
+        )
+        filenames = filedialog.askopenfilenames(title="Виберіть вхідні файли", filetypes=filetypes)
+        if filenames:
+            self.input_file_paths = list(filenames)
+            if len(self.input_file_paths) == 1:
+                self.input_files_label.config(text=os.path.basename(self.input_file_paths[0]))
+            else:
+                self.input_files_label.config(text=f"{len(self.input_file_paths)} файлів вибрано")
+        else:
+            self.input_file_paths = []
+            self.input_files_label.config(text="Файли не вибрано")
+
+    def select_output_file(self):
+        tool = self.selected_tool.get()
+        default_ext = ".csv"
+        if tool == "apq2gpx": default_ext = ".gpx"  # Або .json, залежно від опцій
+
+        # Типи файлів для діалогу збереження
+        filetypes_save = (
+            ("CSV файли", "*.csv"),
+            ("GPX файли", "*.gpx"),
+            ("JSON файли", "*.json"),
+            ("Всі файли", "*.*")
+        )
+        if tool == "apq2csv":
+            filetypes_save = (("CSV файли", "*.csv"), ("Всі файли", "*.*"))
+        elif tool == "apq2gpx":
+            filetypes_save = (("GPX файли", "*.gpx"), ("JSON файли", "*.json"), ("Всі файли", "*.*"))
+
+        filename = filedialog.asksaveasfilename(title="Виберіть вихідний файл", defaultextension=default_ext,
+                                                filetypes=filetypes_save)
+        if filename:
+            self.output_file_path.set(filename)
+
+    def _redirect_std_streams(self):
+        sys.stdout = TextRedirector(self.log_text, "stdout")
+        sys.stderr = TextRedirector(self.log_text, "stderr")
+
+    def _restore_std_streams(self):
+        sys.stdout = self.orig_stdout
+        sys.stderr = self.orig_stderr
+
+    def start_conversion(self):
+        if not self.input_file_paths:
+            messagebox.showerror("Помилка", "Будь ласка, виберіть вхідні файли.")
+            return
+        if not self.output_file_path.get():
+            messagebox.showerror("Помилка", "Будь ласка, виберіть або вкажіть вихідний файл.")
+            return
+
+        self.log_text.configure(state='normal')
+        self.log_text.delete(1.0, tk.END)
+        self.log_text.insert(tk.END, "Початок конвертації...\n")
+        self.log_text.configure(state='disabled')
+        self.master.update_idletasks()  # Оновити GUI перед довгою операцією
+
+        self._redirect_std_streams()
+
+        tool = self.selected_tool.get()
+        args_list = []
+
+        # Формуємо аргументи для CLI-подібного виклику
+        # Загальні опції
+        verbosity = self.verbosity_level.get()
+        if verbosity == 1:
+            args_list.append('-v')
+        elif verbosity == 2:
+            args_list.append('-vv')  # Для argparse -vv це action='count'
+        # verbosity 0 (звичайна) не потребує прапора, якщо Base клас обробляє це як дефолт
+
+        if self.force_overwrite.get():
+            args_list.append('-f')
+
+        app_instance = None
+        success = False
+
+        try:
+            # Важливо: передаємо gui_log_widget в конструктор Base через конструктор App...
+            # Це вже зроблено в __init__ кожного App... класу.
+            # Тут ми просто передаємо verbosity, gui_log_widget буде встановлено в __init__ App...
+
+            current_verbosity = self.verbosity_level.get()
+            # Якщо quiet, то -1, інакше кількість -v
+            # Але argparse обробляє -v count, тому передаємо просто кількість
+            # А Base клас вже використовує self.verbosity
+
+            if tool == "apq2csv":
+                args_list.extend(['-o', self.output_file_path.get()])
+                args_list.extend(self.input_file_paths)
+                app_instance = AppApqToCsv(args_list, verbosity=current_verbosity, gui_log_widget=self.log_text)
+            elif tool == "apq2gpx":
+                args_list.extend(['-o', self.output_file_path.get()])
+                args_list.append('-g')
+                args_list.extend(self.input_file_paths)
+                app_instance = AppApqToGpx(args_list, verbosity=current_verbosity, gui_log_widget=self.log_text)
+
+            if app_instance and hasattr(app_instance, 'args') and app_instance.args:
+                # Переконуємося, що verbosity та gui_log_widget встановлені коректно
+                # Це вже має бути зроблено в __init__ відповідного App... класу
+                app_instance.verbosity = current_verbosity  # Встановлюємо verbosity для екземпляра
+                app_instance.gui_log_widget = self.log_text  # Встановлюємо логер для екземпляра
+
+                success = app_instance.run()
+            elif app_instance and hasattr(app_instance, 'args') and app_instance.args is None:
+                # __init__ обробив -h або мав помилку
+                pass
+            else:
+                # Якщо app_instance не None, але args не встановлено, це дивно
+                if app_instance:
+                    self.error("Не вдалося коректно ініціалізувати інструмент '%s' (відсутні розібрані аргументи).",
+                               tool)
+                else:  # app_instance is None
+                    self.error("Не вдалося створити екземпляр інструменту: %s", tool)
+
+
+        except Exception as e:
+            self.error(f"Виняткова ситуація під час конвертації: {e}")
+            success = False
+        finally:
+            self._restore_std_streams()
+
+        if success:
+            messagebox.showinfo("Завершено",
+                                f"Конвертація успішно завершена!\nВихідний файл: {self.output_file_path.get()}")
+            self.log_text.configure(state='normal')
+            self.log_text.insert(tk.END,
+                                 f"\nКонвертація успішно завершена!\nВихідний файл: {self.output_file_path.get()}\n")
+            self.log_text.configure(state='disabled')
+        else:
+            messagebox.showerror("Помилка", "Під час конвертації виникли помилки. Дивіться деталі у лозі.")
+            self.log_text.configure(state='normal')
+            self.log_text.insert(tk.END, "\nПід час конвертації виникли помилки.\n")
+            self.log_text.configure(state='disabled')
+
+
+class TextRedirector:
+    """Клас для перенаправлення stdout/stderr у Tkinter Text widget."""
+
+    def __init__(self, widget, tag="stdout"):
+        self.widget = widget
+        self.tag = tag
+
+    def write(self, str_val):
+        self.widget.configure(state='normal')
+        self.widget.insert(tk.END, str_val, (self.tag,))
+        self.widget.see(tk.END)
+        self.widget.update_idletasks()
+        self.widget.configure(state='disabled')
+
+    def flush(self):
+        pass
+
+    # --- Головний диспетчер ---
+
+
+def main():
+    if len(sys.argv) > 1:
+        script_name = os.path.basename(sys.argv[0])
+        args_for_tool = sys.argv[1:]
+
+        tool_name = None
+
+        if script_name.startswith("apq2gpx"):
+            tool_name = "apq2gpx"
+        elif script_name.startswith("apq2csv"):
+            tool_name = "apq2csv"
+        elif script_name.startswith("places2apq"):
+            tool_name = "places2apq"
+        elif sys.argv[1] in ['apq2gpx', 'apq2csv', 'places2apq']:
+            tool_name = sys.argv[1]
+            args_for_tool = sys.argv[2:]
+        elif sys.argv[1] in ['-h', '--help']:
+            base_app_for_help = Base()
+            base_app_for_help.help('apqtool')
+            sys.exit(0)
+        else:
+            base_app_for_help = Base()
+            print(f"Невідомий інструмент або неправильний виклик: '{sys.argv[1] if len(sys.argv) > 1 else ''}'",
+                  file=sys.stderr)
+            base_app_for_help.help('apqtool')
+            sys.exit(1)
+
+        app = None
+        # Для CLI режиму gui_log_widget не потрібен
+        if tool_name == 'apq2gpx':
+            app = AppApqToGpx(args_for_tool)
+        elif tool_name == 'apq2csv':
+            app = AppApqToCsv(args_for_tool)
+        elif tool_name == 'places2apq':
+            app = AppPlacesToApq(args_for_tool)
+
+        if app and hasattr(app, 'args') and app.args is not None:
+            if app.run():
+                sys.exit(0)
+            else:
+                sys.exit(1)
+        elif app and hasattr(app, 'args') and app.args is None:  # -h було оброблено в __init__
+            sys.exit(0)
+        else:
+            # Якщо app is None, або args не встановлено, __init__ мав вивести помилку/допомогу
+            sys.exit(1)  # Загальна помилка, якщо не вийшли раніше
+    else:
+        # Запуск GUI, якщо немає аргументів командного рядка
+        root = tk.Tk()
+        gui = ApqToolGui(root)
+        root.mainloop()
+
+
+# --- Секція DATA (для довідки, як у Perl) ---
+HELP_TEXT_DATA = """
+"
+####################################################################################################
+\\section{header}
+#
+flipflip's AlpineQuest (https://www.alpinequest.net/) Tools (Python Port)
+\\end
+#
+#
+####################################################################################################
+\\section{copyright}
+#
+Copyright (c) 2017-2024 Philippe Kehl <flipflip at oinkzwurgl dot org> and contributors
+Python port based on original Perl script. See source code for details.
+\\end
+#
+#
+####################################################################################################
+\\section{apqtool}
+\\include{header}
+
+\\include{copyright}
+
+Використання (CLI):
+
+    apqtool.py <інструмент> [аргументи..]
+    python apqtool.py <інструмент> [аргументи..]
+
+Запуск без аргументів відкриє графічний інтерфейс.
+
+Де <інструмент> один з:
+
+    apq2gpx    -- Конвертер файлів AlpineQuest у GPX та JSON (частково реалізовано)
+    apq2csv    -- Конвертер файлів AlpineQuest у CSV
+    places2apq -- Конвертер Google Maps 'Ваші місця' (структура, не реалізовано повністю)
+
+Використовуйте <інструмент> -h для отримання детальнішої довідки по конкретному інструменту. Наприклад:
+
+    python apqtool.py apq2csv -h
+
+Або, якщо ви перейменували/створили символічне посилання `apq2csv.py` на `apqtool.py`:
+
+    python apq2csv.py -h
+
+\\end
+#
+#
+####################################################################################################
+\\section{apq2gpx}
+
+\\include{header}
+\\include{copyright}
+
+apq2gpx -- Конвертер файлів AlpineQuest у GPX та JSON (Python-версія, частково реалізовано)
+
+Цей інструмент (у Python-версії) має на меті читати формати файлів AlpineQuest
+та конвертувати їх у GPX та/або JSON. Повна функціональність Perl-версії
+ще може бути не реалізована. Потребує встановлення модуля 'gpxpy'.
+
+Використання:
+
+   python apqtool.py apq2gpx [-h] [-v|-q] [-j[j]] [-g[g]] [-b] [-m] [-f] [-o <база_виводу>] <файл> ...
+
+Де:
+   -h, --help   показати цю довідку
+   -v, --verbose збільшити детальність виводу (можна вказати кілька разів)
+   -q, --quiet  тихий режим (менше виводу)
+   -j           генерувати JSON вивід (кількість 'j' може впливати на форматування)
+   -g           генерувати GPX вивід (за замовчуванням, якщо не вказано інше)
+   -b, --bin    записати вміст LDK у окремі бінарні файли
+   -m, --merge  об'єднати всі вхідні файли в один вихідний файл
+   -f, --force  перезаписати існуючі файли
+   -o <база>    базове ім'я/директорія для вихідних файлів або '-' для stdout
+   <файл>       один або більше вхідних файлів
+
+\\end
+#
+#
+####################################################################################################
+\\section{apq2csv}
+
+\\include{header}
+\\include{copyright}
+
+apq2csv -- Конвертер файлів AlpineQuest у CSV (Python-версія)
+
+Цей інструмент читає файли AlpineQuest (WPT, SET, RTE, ARE, TRK, LDK) та конвертує
+дані їх точок в один CSV файл.
+
+Використання:
+
+    python apqtool.py apq2csv [-h] [-v] [-q] -o <вихідний_файл.csv> [-f] <файл> ...
+
+Де:
+    -h, --help         показати цю довідку та вийти
+    -v, --verbose      збільшити детальність виводу (можна вказати кілька разів)
+    -q, --quiet        тихий режим (менше виводу)
+    -o <вихідний_файл> вказати вихідний CSV файл (обов'язково, або '-' для stdout)
+    -f, --force        перезаписати вихідний файл, якщо він вже існує
+    <файл>             один або більше вхідних файлів (.wpt, .set, .rte, .trk, .ldk тощо)
+
+Приклади:
+
+    Конвертувати трек та набір точок в один CSV файл:
+        python apqtool.py apq2csv -o combined_data.csv my_track.trk my_waypoints.set
+
+    Конвертувати всі точки з файлу-контейнера (.ldk):
+        python apqtool.py apq2csv -o landmarks.csv -f my_landmarks.ldk
+
+Формат CSV стовпців (детальний список див. у коді):
+    type, source_file, item_name, lat, lon, ele, timestamp_utc, ...
+
+\\end
+#
+#
+####################################################################################################
+\\section{places2apq}
+
+\\include{header}
+\\include{copyright}
+
+places2apq -- Google Maps 'Ваші місця' (Python-версія, структура)
+
+Цей інструмент призначений для читання GeoJSON файлів з Google Maps Takeout.
+Повна конвертація у формат AlpineQuest .SET наразі не реалізована.
+
+Використання:
+
+    python apqtool.py places2apq [-h] [-v|-q] -s <output.set> <файл.json> ...
+
+Де:
+    -h, --help       показати цю довідку
+    -v, --verbose    збільшити детальність
+    -q, --quiet      тихий режим
+    -s <output.set>  Шлях до майбутнього .SET файлу (наразі не створюється)
+    <файл.json>      Один або більше GeoJSON файлів з Google Takeout
+
+\\end
+####################################################################################################
+"""
+
+
+def _base_help_from_string(self, section):
+    lines = HELP_TEXT_DATA.splitlines()
+    in_section = False
+    print(f"Показ довідки для секції: {section}", file=sys.stderr)
+
+    for line_num, line in enumerate(lines):
+        if line.startswith("#"):
+            continue
+        if line.startswith(f"\\section{{{section}}}"):
+            in_section = True
+            if line_num + 1 < len(lines) and lines[line_num + 1].strip() == "#":
+                pass
+            continue
+        elif line.startswith("\\end"):
+            if in_section:
+                in_section = False
+            continue
+        elif in_section and line.startswith("\\include{"):
+            pass
+        elif in_section:
+            clean_line = line.lstrip('"') if line.startswith('"') else line
+            print(clean_line, file=sys.stderr)
+
+    return True
+
+
+Base.help = _base_help_from_string
+
+if __name__ == '__main__':
+    if os.name == 'nt':
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+            sys.stderr.reconfigure(encoding='utf-8')
+        except Exception as e:
+            pass
+    main()
+
