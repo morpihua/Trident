@@ -5,7 +5,6 @@ import base64
 import sys
 from typing import Optional, Callable
 
-# Додаємо кольори для консолі (мінімальний варіант)
 COLORS_CONSOLE = {
     'E': '\033[91m',  # Червоний
     'W': '\033[93m',  # Жовтий
@@ -83,9 +82,6 @@ class Base:
             return None
 
 class ApqFile(Base):
-    # ... (залишаємо все як було, додаємо type hints)
-    
-    class ApqFile(Base):
     MAX_REASONABLE_STRING_LEN = 65536 * 2
     MAX_REASONABLE_ENTRIES = 100000
 
