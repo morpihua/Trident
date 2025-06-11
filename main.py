@@ -2,10 +2,29 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import os
 import sys
-from typing import List, Dict, Any
+import copy
+import re
+from typing import List, Dict, Any, Optional
+import csv
+import json
+import zipfile
+import random
+import math
+import uuid
+from datetime import datetime, timezone
+import xml.etree.ElementTree as ET
+
+# Сторонні бібліотеки (переконайтесь, що вони встановлені: pip install openpyxl xlsxwriter)
+try:
+    import openpyxl
+    import xlsxwriter
+except ImportError:
+    messagebox.showerror("Відсутні бібліотеки", "Будь ласка, встановіть 'openpyxl' та 'xlsxwriter' для роботи з файлами Excel.\n\npip install openpyxl xlsxwriter")
+    sys.exit()
+
 from apq import ApqFile
 from colors import COLORS, COLORS_EN_UA
-from utils import convert_color, xml_escape, calculate_distance
+from utils import xml_escape, calculate_distance
 from tooltip import Tooltip
 
 class Main:
@@ -32,6 +51,40 @@ class Main:
             "Green": "#4caf50", "LightGreen": "#8bc34a", "Lime": "#cddc39", "Yellow": "#ffeb3b",
             "Amber": "#ffc107", "Orange": "#ff9800", "DeepOrange": "#ff5722", "Brown": "#795548",
             "BlueGrey": "#607d8b", "Black": "#010101", "White": "#ffffff"
+        }
+        
+        # ICON_ID_COLOR_MAP та extended_color_names_map для розпізнавання кольору
+        # Вони визначені тут, як члени класу, щоб бути доступними в `convert_color`
+        self.ICON_ID_COLOR_MAP = {
+            0: (255,255,255), # white
+            1: (102,51,153), # violet
+            2: (255,0,0),    # red
+            3: (0,128,0),    # green
+            4: (0,0,255),    # blue
+            5: (255,255,0),  # yellow
+            6: (255,165,0),  # orange
+            7: (128,128,128),# gray
+            8: (0,0,0),      # black
+            9: (255,192,203),# pink
+            10: (0,255,255), # cyan
+            # ДОДАЙТЕ СЮДИ ІНШІ icon_id та їх RGB значення, якщо вони є у ваших файлах WPT
+        }
+
+        self.extended_color_names_map = {
+            "червоний": "Red", "фіолетовий": "Purple", "білий": "White", "чорний": "Black",
+            "жовтий": "Yellow", "помаранчевий": "Orange", "сірий": "BlueGrey", "рожевий": "Pink",
+            "блакитний": "Cyan", "зелений": "Green", "синій": "Blue",
+            "салатовий": "LightGreen", "лаймовий": "Lime", "бурштиновий": "Amber",
+            "насичено-помаранчевий": "DeepOrange", "коричневий": "Brown",
+            "темно-фіолетовий": "DeepPurple", "індиго": "Indigo", "бірюзовий": "Teal",
+            "красный": "Red", "фиолетовый": "Purple", "розовый": "Pink",
+            "темно-фиолетовый": "DeepPurple", "индиго": "Indigo", "синий": "Blue",
+            "бирюзовый": "Teal", "зеленый": "Green", "салатовый": "LightGreen",
+            "лаймовый": "Lime", "желтый": "Yellow", "янтарный": "Amber",
+            "оранжевый": "Orange", "насыщенно-оранжевый": "DeepOrange",
+            "коричневый": "Brown", "сине-серый": "BlueGrey", "черный": "Black",
+            "белый": "White", "голубой": "Cyan",
+            # ДОДАЙТЕ СЮДИ ІНШІ АЛІАСИ КОЛЬОРІВ, ЯКЩО ПОТРІБНО
         }
 
         # Нові опції для випадаючого меню
@@ -353,7 +406,7 @@ class Main:
         directory, filename = os.path.split(base_save_path)
         name_part, ext_part = os.path.splitext(filename)
 
-        name_part = re.sub(r'\(\d+\)$', '', name_part).strip()
+        name_part = re.sub(r'\s*\(\d+\)$', '', name_part).strip()
 
         new_filename = f"{name_part}({chunk_index}){ext_part}"
         return os.path.join(directory, new_filename)
@@ -406,7 +459,9 @@ class Main:
         settings_win.focus_set()
 
     def _process_data(self, file_content, color_override_english_name):
-        if not file_content: return None
+        if not file_content:  # <-- ЗАХИСТ ВІД None
+            print("DEBUG: file_content is None or empty!", file_content)
+            return None
         content = copy.deepcopy(file_content)
 
         if color_override_english_name != self.color_options[0]:
@@ -553,7 +608,9 @@ class Main:
 
         def _create_point_dict(loc_data, item_meta_data, default_name_prefix="Точка", item_idx=0,
                                apq_source_file_type_for_item=None,
-                               source_file_global_meta_for_item=None):
+                               source_file_global_meta_for_item=None,
+                               apq_icon_id: Optional[int] = None, # ДОДАНО НОВІ ПАРАМЕТРИ
+                               apq_color_int: Optional[int] = None): # ДОДАНО НОВІ ПАРАМЕТРИ
             if not loc_data or loc_data.get('lon') is None or loc_data.get('lat') is None:
                 self._update_status(f"Увага: Пропущено точку (відсутні координати) у {file_basename}", warning=True)
                 return None
@@ -564,7 +621,86 @@ class Main:
 
             final_name = effective_meta.get('name', f"{default_name_prefix}_{item_idx + 1}")
             point_type_val = effective_meta.get('sym', effective_meta.get('icon', 'Landmark'))
-            point_color_name = self.convert_color(effective_meta.get('color', 'White'), "name", True)
+            
+            # --- DEBUG: Перевірка метаданих для точки ---
+            print(f"DEBUG: effective_meta для точки '{final_name}': {effective_meta}")
+            print(f"DEBUG: Значення 'color' у effective_meta: {effective_meta.get('color')}")
+            print(f"DEBUG: Значення 'icon' у effective_meta: {effective_meta.get('icon')}")
+            print(f"DEBUG: Значення 'sym' у effective_meta: {effective_meta.get('sym')}")
+            print(f"DEBUG: Значення 'apq_icon_id': {apq_icon_id}")
+            print(f"DEBUG: Значення 'apq_color_int': {apq_color_int}")
+            # --- Кінець DEBUG ---
+
+            determined_color_value = None
+
+            # 1. Пріоритет: icon_id з ApqFile (якщо є)
+            if apq_icon_id is not None and apq_icon_id in self.ICON_ID_COLOR_MAP:
+                rgba_tuple = self.ICON_ID_COLOR_MAP[apq_icon_id]
+                determined_color_value = f"#{rgba_tuple[0]:02x}{rgba_tuple[1]:02x}{rgba_tuple[2]:02x}"
+                print(f"DEBUG: Колір знайдено через ICON_ID ({apq_icon_id}): {determined_color_value}")
+
+            # 2. Пріоритет: color_int з ApqFile (якщо є)
+            if determined_color_value is None and apq_color_int is not None:
+                r = (apq_color_int >> 16) & 0xFF
+                g = (apq_color_int >> 8) & 0xFF
+                b = apq_color_int & 0xFF
+                determined_color_value = f"#{r:02x}{g:02x}{b:02x}"
+                print(f"DEBUG: Колір знайдено через APQ color_int ({apq_color_int}): {determined_color_value}")
+
+            # 3. Пріоритет: поля 'color', 'icon', 'sym' з effective_meta
+            if determined_color_value is None: # Якщо колір досі не визначено
+                meta_color_val = effective_meta.get('color')
+                meta_icon_val = effective_meta.get('icon')
+                meta_sym_val = effective_meta.get('sym')
+
+                if meta_color_val is not None:
+                    # Важливо: використовуємо self.convert_color, але його потрібно вдосконалити,
+                    # щоб він повертав None, якщо колір не розпізнано, а не "White", щоб не перешкоджати.
+                    # Поки що, якщо convert_color повертає White, це може бути або дійсний білий, або нерозпізнаний.
+                    test_color_hex = self.convert_color(meta_color_val, "hex", True)
+                    # Якщо convert_color не розпізнав і дав білий за замовчуванням,
+                    # ми не вважаємо це знайденим кольором на цьому етапі.
+                    if test_color_hex and test_color_hex != "#ffffff": 
+                        determined_color_value = test_color_hex
+                        print(f"DEBUG: Колір знайдено через effective_meta['color']: {determined_color_value}")
+                
+                if determined_color_value is None and meta_icon_val is not None:
+                    # Шукаємо назву кольору в назві іконки
+                    for color_name_key, color_hex_val in self.colors.items():
+                        if color_name_key.lower() in str(meta_icon_val).lower():
+                            determined_color_value = color_hex_val
+                            print(f"DEBUG: Колір знайдено через effective_meta['icon']: {determined_color_value}")
+                            break
+
+                if determined_color_value is None and meta_sym_val is not None:
+                    # Шукаємо назву кольору в назві символу
+                    for color_name_key, color_hex_val in self.colors.items():
+                        if color_name_key.lower() in str(meta_sym_val).lower():
+                            determined_color_value = color_hex_val
+                            print(f"DEBUG: Колір знайдено через effective_meta['sym']: {determined_color_value}")
+                            break
+            
+            # 4. Назви кольорів у полі 'name'
+            if determined_color_value is None:
+                name_l = final_name.lower()
+                for ru_name, en_name in self.extended_color_names_map.items(): # Використовуємо self.extended_color_names_map
+                    if ru_name in name_l:
+                        determined_color_value = self.colors.get(en_name, None) # Тепер повертаємо None, якщо не знайшли
+                        if determined_color_value: # Перевіряємо, чи знайдено
+                            print(f"DEBUG: Колір знайдено через назву у полі 'name' ({ru_name}): {determined_color_value}")
+                            break
+                if determined_color_value is None: # Якщо не знайдено за українськими/російськими назвами
+                    for cname_en in self.colors.keys():
+                        if cname_en.lower() in name_l:
+                            determined_color_value = self.colors.get(cname_en, None) # Тепер повертаємо None, якщо не знайшли
+                            if determined_color_value: # Перевіряємо, чи знайдено
+                                print(f"DEBUG: Колір знайдено через англ. назву у полі 'name' ({cname_en}): {determined_color_value}")
+                                break
+
+            # Використовуємо знайдений HEX-колір, або білий за замовчуванням
+            # convert_color(None, "name", True) поверне "White"
+            final_point_color_name = self.convert_color(determined_color_value, "name", True)
+            
             description_val = effective_meta.get('comment', effective_meta.get('description', ''))
 
             extra_desc_parts = []
@@ -589,7 +725,7 @@ class Main:
                 "original_location_data": loc_data,
                 "apq_original_type": apq_source_file_type_for_item,
                 'milgeo:meta:name': final_name,
-                'milgeo:meta:color': point_color_name,
+                'milgeo:meta:color': final_point_color_name, # Оновлено!
                 'milgeo:meta:desc': description_val,
                 'milgeo:meta:creator': effective_meta.get('creator'),
                 'milgeo:meta:creator_url': effective_meta.get('creator_url'),
@@ -599,19 +735,29 @@ class Main:
 
         if apq_type == 'wpt':
             loc = apq_parsed_data.get('location')
+            # Отримання icon_id та color_int з apq_parsed_data
+            wpt_icon_id = apq_parsed_data.get('icon_id')
+            wpt_color_int = apq_parsed_data.get('color_int')
+
             point = _create_point_dict(loc, global_meta, "Waypoint",
                                        apq_source_file_type_for_item='wpt',
-                                       source_file_global_meta_for_item=global_meta)
+                                       source_file_global_meta_for_item=global_meta,
+                                       apq_icon_id=wpt_icon_id,
+                                       apq_color_int=wpt_color_int)
             if point: normalized_content.append(point)
 
         elif apq_type in ['set', 'rte']:
             waypoints_list = apq_parsed_data.get('waypoints', [])
             default_prefix = global_meta.get('name', apq_type.upper())
             for idx, wpt_entry in enumerate(waypoints_list):
+                # Для SET/RTE, icon_id та color_int повинні бути в самому wpt_entry,
+                # якщо _get_waypoints в apq.py їх зчитав.
                 point = _create_point_dict(
                     wpt_entry.get('location'), wpt_entry.get('meta', {}),
                     default_prefix, idx, apq_source_file_type_for_item=apq_type,
-                    source_file_global_meta_for_item=global_meta
+                    source_file_global_meta_for_item=global_meta,
+                    apq_icon_id=wpt_entry.get('icon_id'), # Передача icon_id з wpt_entry
+                    apq_color_int=wpt_entry.get('color_int') # Передача color_int з wpt_entry
                 )
                 if point: normalized_content.append(point)
 
@@ -634,15 +780,23 @@ class Main:
                     'milgeo:meta:sidc': global_meta.get('sidc')
                 }
                 normalized_content.append(poly_item)
+                # --- DEBUG: Перевірка для полігона ---
+                print(f"DEBUG: Poly item '{area_name}' area_color_name: {area_color_name}")
+                print(f"DEBUG: Global meta for area: {global_meta}")
+                # --- Кінець DEBUG ---
 
         elif apq_type == 'trk':
             track_default_name = global_meta.get('name', 'Track')
             for idx, poi_entry in enumerate(apq_parsed_data.get('waypoints', [])):
+                # Для POI в TRK, icon_id та color_int повинні бути в самому poi_entry,
+                # якщо _get_waypoints в apq.py їх зчитав.
                 point = _create_point_dict(
                     poi_entry.get('location'), poi_entry.get('meta', {}),
                     f"{track_default_name}_POI", idx,
                     apq_source_file_type_for_item='trk_poi',
-                    source_file_global_meta_for_item=global_meta
+                    source_file_global_meta_for_item=global_meta,
+                    apq_icon_id=poi_entry.get('icon_id'), # Передача icon_id з poi_entry
+                    apq_color_int=poi_entry.get('color_int') # Передача color_int з poi_entry
                 )
                 if point: normalized_content.append(point)
 
@@ -672,6 +826,10 @@ class Main:
                         'milgeo:meta:sidc': effective_seg_meta.get('sidc', global_meta.get('sidc'))
                     }
                     normalized_content.append(line_item)
+                    # --- DEBUG: Перевірка для лінії ---
+                    print(f"DEBUG: Line item '{segment_name}' segment_color_name: {segment_color_name}")
+                    print(f"DEBUG: Effective segment meta: {effective_seg_meta}")
+                    # --- Кінець DEBUG ---
 
         if not normalized_content and apq_type not in ['ldk', 'bin']:
             self._update_status(f"Увага: Не знайдено даних для нормалізації у {file_basename} (тип {apq_type})",
@@ -683,7 +841,7 @@ class Main:
         content_list = []
         file_basename_log = os.path.basename(file_path_to_read)
         try:
-            apq_parser_instance = ApqFile(path=file_path_to_read, verbosity=1, gui_logger_func=self._update_status)
+            apq_parser_instance = ApqFile(path=file_path_to_read, verbosity=3, gui_logger_func=self._update_status) # Змінено verbosity на 3
 
             if not apq_parser_instance.parse_successful:
                 self._update_status(f"Помилка парсингу APQ файлу: {file_basename_log}", error=True)
@@ -1215,66 +1373,116 @@ class Main:
                 if geom_type == "Polygon" and coords_data and coords_data[0] != coords_data[-1]:
                     coords_str += f" {coords_data[0]['lon']},{coords_data[0]['lat']},0"
 
-                geom_element_str = f"<{geom_type}><coordinates>{coords_str}</coordinates></{geom_type}>"
+                # Коректне створення елементів для Polygon KML
                 if geom_type == "Polygon":
-                    geom_element_str = f"<Polygon><outerBoundaryIs><LinearRing>{ET.fromstring(geom_element_str).find('coordinates').text}</LinearRing></outerBoundaryIs></Polygon>"
-                    # A bit of a hack to construct Polygon correctly, should be improved
-                    placemark.append(ET.fromstring(
-                        f"<Polygon><outerBoundaryIs><LinearRing><coordinates>{coords_str}</coordinates></LinearRing></outerBoundaryIs></Polygon>"))
-                else:
-                    placemark.append(ET.fromstring(f"<LineString><coordinates>{coords_str}</coordinates></LineString>"))
+                    polygon_elem = ET.SubElement(placemark, "Polygon")
+                    outer_boundary = ET.SubElement(polygon_elem, "outerBoundaryIs")
+                    linear_ring = ET.SubElement(outer_boundary, "LinearRing")
+                    ET.SubElement(linear_ring, "coordinates").text = coords_str
+                else: # LineString
+                    linestring_elem = ET.SubElement(placemark, "LineString")
+                    ET.SubElement(linestring_elem, "coordinates").text = coords_str
 
         ET.indent(kml_doc, space="  ")
         return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(kml_doc, encoding='unicode')
 
-    def convert_color(self, input_value, output_type="hex"):
+    def convert_color(self, input_value: Any, output_type: str = "hex", allow_name_lookup: bool = False) -> Optional[str]:
         """
-        Конвертує колір між різними форматами (назва, hex, rgb).
+        Конвертує колір між різними форматами (назва, hex, rgb, int ARGB, icon_id).
         Використовує єдину палітру кольорів.
-        - input_value: може бути назвою (str), hex-кодом (str) або rgb-кортежем (tuple).
+        - input_value: може бути назвою (str), hex-кодом (str), rgb-кортежем (tuple),
+                       цілим числом (int - для ARGB), або icon_id (int).
         - output_type: 'hex', 'name', 'int_rgb', 'str_rgb'.
+        - allow_name_lookup: дозволяє пошук за назвою в палітрі.
         """
         if input_value is None:
             return None
 
-        # Створюємо реверсивні словники для швидкого пошуку
+        # Створюємо реверсивні словники для швидкого пошуку за HEX
         hex_to_name = {v.lower(): k for k, v in self.colors.items()}
 
         input_hex = ""
 
-        # Визначаємо вхідний формат і конвертуємо в HEX
-        if isinstance(input_value, str):
+        # 1. Спроба розпізнати колір, якщо input_value - це ціле число (ARGB або icon_id)
+        if isinstance(input_value, int):
+            # Якщо input_value - це ідентифікатор іконки з ICON_ID_COLOR_MAP
+            if input_value in self.ICON_ID_COLOR_MAP:
+                rgba_tuple = self.ICON_ID_COLOR_MAP[input_value]
+                r, g, b = rgba_tuple[0], rgba_tuple[1], rgba_tuple[2]
+                input_hex = f"#{r:02x}{g:02x}{b:02x}"
+            # Якщо input_value - це цілочисельний ARGB колір (наприклад, з wp.color)
+            else:
+                a = (input_value >> 24) & 0xFF
+                r = (input_value >> 16) & 0xFF
+                g = (input_value >> 8) & 0xFF
+                b = (input_value) & 0xFF
+                input_hex = f"#{r:02x}{g:02x}{b:02x}"
+        
+        elif isinstance(input_value, str):
             value_lower = input_value.lower().strip()
-            if value_lower in self.colors:  # Вхід - назва кольору (з урахуванням регістру)
-                input_hex = self.colors[input_value].lower()
-            elif value_lower in {k.lower(): v for k, v in self.colors.items()}:  # Вхід - назва з маленької літери
-                input_hex = {k.lower(): v for k, v in self.colors.items()}[value_lower].lower()
+            # Пошук за назвою в нашій палітрі (точною назвою)
+            if value_lower in {k.lower() for k in self.colors}:
+                input_hex = self.colors[[k for k in self.colors if k.lower() == value_lower][0]].lower()
+            # Пошук за HEX-кодом
             elif value_lower.startswith("#") and len(value_lower) == 7:
                 input_hex = value_lower
-        elif isinstance(input_value, (list, tuple)) and len(input_value) == 3:
+            # Розбір RGBA/RGB/HEX з текстового рядка (як у smart_color, використовуючи Regex)
+            else:
+                # HEX у тексті (наприклад, "text #FF00FF more text")
+                m = re.search(r'#?([0-9a-fA-F]{6})', value_lower)
+                if m:
+                    hx = m.group(1)
+                    input_hex = f"#{hx}"
+                else:
+                    # RGBA у тексті (наприклад, "255,0,255,1.0")
+                    m = re.search(r'(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d*\.?\d+)', value_lower)
+                    if m:
+                        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                        input_hex = f"#{r:02x}{g:02x}{b:02x}"
+                    else:
+                        # RGB у тексті (наприклад, "255,0,255")
+                        m = re.search(r'(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})', value_lower)
+                        if m:
+                            r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                            input_hex = f"#{r:02x}{g:02x}{b:02x}"
+                
+                # Якщо після всіх regex все ще не знайшли HEX, спробуємо назву кольору з розширеної мапи
+                if not input_hex:
+                    for ru_name, en_name in self.extended_color_names_map.items():
+                        if ru_name in value_lower:
+                            input_hex = self.colors.get(en_name, None) # Тепер повертаємо None, якщо не знайшли
+                            if input_hex: # Перевіряємо, чи знайдено
+                                break
+                    
+        elif isinstance(input_value, (list, tuple)) and len(input_value) == 3: # RGB кортеж або список
             try:
                 # Конвертуємо RGB в HEX
-                input_hex = "#{:02x}{:02x}{:02x}".format(input_value[0], input_value[1], input_value[2])
+                input_hex = f"#{input_value[0]:02x}{input_value[1]:02x}{input_value[2]:02x}"
             except (TypeError, ValueError):
                 pass
 
-        if not input_hex:  # Якщо не вдалося визначити колір, повертаємо білий
-            input_hex = "#ffffff"
+        if not input_hex: # Якщо досі не визначили HEX
+            input_hex = "#ffffff" # За замовчуванням - білий
 
         # Конвертуємо з HEX у потрібний вихідний формат
         if output_type.lower() == 'hex':
             return input_hex
-
         elif output_type.lower() == 'name':
-            return hex_to_name.get(input_hex, "White")  # Повертаємо назву або "White" за замовчуванням
-
+            found_name = hex_to_name.get(input_hex, None)
+            if found_name:
+                return found_name
+            elif allow_name_lookup:
+                # Якщо немає точного співпадіння, але дозволено пошук, повертаємо білий.
+                # Якщо потрібно складніше порівняння (наприклад, відстань у RGB),
+                # то потрібно додати функцію find_nearest_color_name_from_hex.
+                return "White" 
+            return "White" # За замовчуванням
         elif output_type.lower() == 'int_rgb':
             h = input_hex.lstrip('#')
             try:
                 return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
             except (TypeError, ValueError):
-                return (255, 255, 255)  # Повертаємо білий у разі помилки
-
+                return (255, 255, 255)
         elif output_type.lower() == 'str_rgb':
             h = input_hex.lstrip('#')
             try:
@@ -1282,27 +1490,8 @@ class Main:
                 return f"{rgb[0]},{rgb[1]},{rgb[2]}"
             except (TypeError, ValueError):
                 return "255,255,255"
-
         return None
 
-    def convert_color(self, color_value, target_format, allow_name_lookup=False):
-        if not isinstance(color_value, str): color_value = "White"
-        color_hex = self.colors.get(color_value)
-        if not color_hex:
-            if color_value.startswith("#") and len(color_value) == 7:
-                color_hex = color_value
-                if allow_name_lookup:
-                    return next((name for name, hex_val in self.colors.items() if hex_val.lower() == color_hex.lower()),
-                                "White")
-            else:
-                color_hex = "#ffffff"
-        if target_format == 'hex': return color_hex
-        if target_format == 'name': return next(
-            (name for name, hex_val in self.colors.items() if hex_val.lower() == color_hex.lower()), "White")
-        if target_format == 'str_rgb':
-            color_hex = color_hex.lstrip('#')
-            return f"{int(color_hex[0:2], 16)},{int(color_hex[2:4], 16)},{int(color_hex[4:6], 16)}"
-        return color_hex
 
     def create_kmz(self, contents_list, save_path):
         if not contents_list: return False
@@ -1395,87 +1584,8 @@ class Main:
         else:
             # Fallback for data from KML, GPX, XLSX etc.
             return self.create_csv_original_logic(contents_list, save_path)
-
-    def get_best_color_for_item(self, item):
-        ru_color_map = {
-            "фиолетовый": "Purple",
-            "красный": "Red",
-            "розовый": "Pink",
-            "темно-фиолетовый": "DeepPurple",
-            "индиго": "Indigo",
-            "синий": "Blue",
-            "бирюзовый": "Teal",
-            "зеленый": "Green",
-            "салатовый": "LightGreen",
-            "лаймовый": "Lime",
-            "желтый": "Yellow",
-            "янтарный": "Amber",
-            "оранжевый": "Orange",
-            "насыщенно-оранжевый": "DeepOrange",
-            "коричневый": "Brown",
-            "сине-серый": "BlueGrey",
-            "черный": "Black",
-            "белый": "White",
-            "голубой": "Cyan",
-        }
-        # 1. milgeo:meta:color
-        color = item.get('milgeo:meta:color')
-        if color:
-            if isinstance(color, list): color = color[0] if color else ""
-            color_l = str(color).strip().lower()
-            if color_l in ru_color_map:
-                return ru_color_map[color_l]
-            # hex-код
-            if color_l.startswith("#"):
-                return self.convert_color(color_l, "name", True)
-            # англійська
-            if color_l.capitalize() in self.colors:
-                return color_l.capitalize()
-        # 2. color
-        color = item.get('color')
-        if color:
-            if isinstance(color, list): color = color[0] if color else ""
-            color_l = str(color).strip().lower()
-            if color_l in ru_color_map:
-                return ru_color_map[color_l]
-            if color_l.startswith("#"):
-                return self.convert_color(color_l, "name", True)
-            if color_l.capitalize() in self.colors:
-                return color_l.capitalize()
-        # 3. global_meta
-        global_meta = item.get('global_meta', {})
-        if global_meta:
-            color = global_meta.get('color')
-            if color:
-                color_l = str(color).strip().lower()
-                if color_l in ru_color_map:
-                    return ru_color_map[color_l]
-                if color_l.startswith("#"):
-                    return self.convert_color(color_l, "name", True)
-                if color_l.capitalize() in self.colors:
-                    return color_l.capitalize()
-        # 4. icon
-        icon = item.get('icon')
-        if icon:
-            for cname in self.colors.keys():
-                if cname.lower() in icon.lower():
-                    return cname
-        # 5. sym
-        sym = item.get('sym')
-        if sym:
-            for cname in self.colors.keys():
-                if cname.lower() in sym.lower():
-                    return cname
-        # 6. name (і російською, і англійською)
-        name = item.get('name', '')
-        name_l = name.lower()
-        for ru_name, en_name in ru_color_map.items():
-            if ru_name in name_l:
-                return en_name
-        for cname in self.colors.keys():
-            if cname.lower() in name_l:
-                return cname
-        return "White"
+    
+    # !!! Функція get_best_color_for_item була видалена, її логіка інтегрована в convert_color
 
     def create_csv_for_points_simple(self, contents_list, base_save_path):
         self._update_status(f"Створення CSV (простий) для точок: {os.path.basename(base_save_path)}...",
@@ -1501,7 +1611,9 @@ class Main:
                         if item.get('geometry_type') != 'Point':
                             continue
 
-                        color_str = self.convert_color(self.get_best_color_for_item(item), 'str_rgb', True) + ',1'
+                        # Використовуємо вже визначений колір з item['color']
+                        color_to_export = item.get('color', 'White') 
+                        color_str = self.convert_color(color_to_export, 'str_rgb', True) + ',1'
                         wkt_string = f"POINT ({item.get('lon', 0.0)} {item.get('lat', 0.0)})"
 
                         def meta_json(val):
@@ -1797,7 +1909,6 @@ class Main:
         free_numbers = self.generate_free_numbers_list(len(points))
         for i, item in enumerate(points): item['name'] = free_numbers[i]
         return points
-
 
 
 if __name__ == "__main__":
