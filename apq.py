@@ -5,19 +5,27 @@ import base64
 import sys
 from typing import Optional, Callable
 
+# Додаємо кольори для консолі (мінімальний варіант)
+COLORS_CONSOLE = {
+    'E': '\033[91m',  # Червоний
+    'W': '\033[93m',  # Жовтий
+    'P': '\033[0m',   # Звичайний
+    'D': '\033[90m',  # Сірий
+    'T': '\033[95m',  # Фіолетовий
+    'o': '\033[0m',   # Скидання
+}
+
 class Base:
     def __init__(self, verbosity: int = 0, gui_logger_func: Optional[Callable] = None):
         self.verbosity = verbosity
         self.gui_logger_func = gui_logger_func
-        # ... (решта як у вашому коді)
 
     def _log(self, level_char, message, *args):
         level_map_verbosity = {'E': -2, 'W': -1, 'P': 0, 'D': 1, 'T': 2}
         if self.verbosity < level_map_verbosity.get(level_char, 0):
             return
 
-        prefix_map = {'E': 'ПОМИЛКА APQ: ', 'W': 'УВАГА APQ: ', 'P': 'APQ: ', 'D': 'НАЛАГОДЖЕННЯ APQ: ',
-                      'T': 'TRACE APQ: '}
+        prefix_map = {'E': 'ПОМИЛКА APQ: ', 'W': 'УВАГА APQ: ', 'P': 'APQ: ', 'D': 'НАЛАГОДЖЕННЯ APQ: ', 'T': 'TRACE APQ: '}
         log_message = prefix_map.get(level_char, '?') + (message % args if args else message)
 
         if self.gui_logger_func:
@@ -25,10 +33,9 @@ class Base:
             is_warning = level_char == 'W'
             try:
                 self.gui_logger_func(log_message, error=is_error, warning=is_warning)
-            except TypeError:  # Old gui_logger_func might not support error/warning args
+            except TypeError:
                 self.gui_logger_func(log_message)
 
-        # Always print to stderr for console visibility
         print(COLORS_CONSOLE.get(level_char, '') + log_message + COLORS_CONSOLE.get('o', ''), file=sys.stderr)
 
     def error(self, message, *args):
@@ -37,7 +44,7 @@ class Base:
     def warning(self, message, *args):
         self._log('W', message, *args)
 
-    def print(self, message, *args):  # Note: This is APQ.print, not Python's built-in
+    def print(self, message, *args):
         self._log('P', message, *args)
 
     def debug(self, message, *args):
@@ -47,7 +54,7 @@ class Base:
         self._log('T', message, *args)
 
     def trace_hexdump(self, data_bytes):
-        if self.verbosity >= 2:  # Changed from 3 to 2 for more frequent hexdumps if needed
+        if self.verbosity >= 2:
             data_size = len(data_bytes)
             for offs in range(0, data_size, 16):
                 s_bytes = data_bytes[offs:offs + 16]
@@ -64,17 +71,17 @@ class Base:
 
     def _load_raw(self, path_to_load):
         if not os.path.isfile(path_to_load) or not os.access(path_to_load, os.R_OK):
-            self.warning("Неможливо прочитати '%s'!", path_to_load);
+            self.warning("Неможливо прочитати '%s'!", path_to_load)
             return None
         try:
             with open(path_to_load, 'rb') as f_in:
                 raw_data_content = f_in.read()
-            self.trace("Прочитано '%s': %d байт.", path_to_load, len(raw_data_content));
+            self.trace("Прочитано '%s': %d байт.", path_to_load, len(raw_data_content))
             return raw_data_content
         except IOError as e_io:
-            self.warning("Помилка читання '%s': %s", path_to_load, e_io);
+            self.warning("Помилка читання '%s': %s", path_to_load, e_io)
             return None
-            
+
 class ApqFile(Base):
     # ... (залишаємо все як було, додаємо type hints)
     
@@ -111,17 +118,17 @@ class ApqFile(Base):
                 try:
                     self.rawts = os.path.getmtime(self.path)
                 except OSError:
-                    self.rawts = time.time()  # Fallback to current time
+                    self.rawts = time.time()
                 load_success = True
             else:
                 self.error("Невідомий тип файлу для шляху: %s!", self.path)
                 raise ValueError(f"Unknown file type for {self.path}")
         elif self.rawdata is not None and self._file_type and self.rawname:
-            valid_raw_types = ["wpt", "set", "rte", "are", "trk", "bin", "ldk"]  # Added ldk
+            valid_raw_types = ["wpt", "set", "rte", "are", "trk", "bin", "ldk"]
             if self._file_type not in valid_raw_types:
                 self.error("Невідомий тип файлу: %s!", self._file_type)
                 raise ValueError(f"Unknown raw type: {self._file_type}")
-            self.path = self.rawname  # Use rawname as path for consistency
+            self.path = self.rawname
             if self.rawts is None: self.rawts = time.time()
             load_success = True
         else:
@@ -129,8 +136,8 @@ class ApqFile(Base):
             raise ValueError("Illegal ApqFile params")
 
         if not load_success or self.rawdata is None:
-            self.error("Дані не завантажено або відсутні для ApqFile.")  # More specific error
-            return  # Early exit if loading failed
+            self.error("Дані не завантажено або відсутні для ApqFile.")
+            return
 
         self.rawsize = len(self.rawdata)
         if self.verbosity >= 3: self.trace_hexdump(self.rawdata)
