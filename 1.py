@@ -37,6 +37,29 @@ except ImportError:
     colorama = None
     COLORS_CONSOLE = {key: '' for key in ['W', 'E', 'P', 'D', 'T', 'c', 'o']}
 
+# --- Map icon_id to color ---
+ICON_ID_COLOR_MAP = {
+    0: "255,255,255,1.0",    # default/white
+    1: "102,51,153,1.0",     # violet
+    2: "255,0,0,1.0",        # red
+    3: "0,128,0,1.0",        # green
+    4: "0,0,255,1.0",        # blue
+    5: "255,255,0,1.0",      # yellow
+    6: "255,165,0,1.0",      # orange
+    7: "128,128,128,1.0",    # gray
+    8: "0,0,0,1.0",          # black
+    9: "255,192,203,1.0",    # pink
+    10: "0,255,255,1.0",     # cyan
+    # extend as needed for your icon set
+}
+
+COLOR_MAP = {
+    "red": "255,0,0,1.0", "green": "0,128,0,1.0", "blue": "0,0,255,1.0",
+    "violet": "102,51,153,1.0", "червоний": "255,0,0,1.0", "фіолетовий": "102,51,153,1.0"
+}
+RGBA_RE = re.compile(r'(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d*\.?\d+)')
+RGB_RE = re.compile(r'(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})')
+HEX_RE = re.compile(r'#?([0-9a-fA-F]{6})')
 
 def xml_escape(text_to_escape):
     if not isinstance(text_to_escape, str):
@@ -686,19 +709,9 @@ class ApqFile(Base):
         # Header in WPT v101 seems to contain main metadata, then another metadata block for the point itself.
         # In v2, header is simpler.
         if self.version > 100:  # v101
-            # For v101, the "header" actually contains the main meta for the file/device.
-            # The actual point data (meta + location) follows.
-            # The header_size seems to point *after* this first meta block.
-            # So we read it, then skip the rest of h_size if any, then read point meta.
-            _ = self._get_metadata()  # Read and discard file-level meta if any within header_size
-            if h_size > self._tell():  # If header_size points beyond the first meta
-                self._seek(h_size)  # Seek to the end of declared header
-        elif h_size > 0:  # v2, skip fixed header if present
-            self._seek(self._tell() + h_size)
-
-        self.data_parsed['meta'] = self._get_metadata()  # This is the waypoint's own metadata
-        self.data_parsed['location'] = self._get_location()
-        return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('location') is not None)
+            self.data_parsed['meta'] = self._get_metadata()  # глобальні метадані
+            self.data_parsed['location'] = self._get_location()  # location одразу після meta
+            return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('location') is not None)
 
     def _parse_set(self):
         self.debug(f"Розбір SET: {self.path or self.rawname}")
@@ -2371,11 +2384,12 @@ class Main:
             return False
 
     def create_csv(self, contents_list, save_path):
-        if not contents_list:
-            self._update_status(f"Немає даних для CSV: {os.path.basename(save_path)}", warning=True)
-            return False
-
         source_type = contents_list[0].get('apq_original_type') if contents_list else None
+        if source_type in ['wpt', 'set', 'rte', 'are']:
+            # Використовуйте саме create_csv_for_points_simple!
+            return self.create_csv_for_points_simple(contents_list, save_path)
+        else:
+            return self.create_csv_original_logic(contents_list, save_path)
 
         if source_type == 'trk':
             return self.create_csv_for_trk(contents_list, save_path)
@@ -2389,18 +2403,101 @@ class Main:
             # Fallback for data from KML, GPX, XLSX etc.
             return self.create_csv_original_logic(contents_list, save_path)
 
-    def create_csv_for_points(self, contents_list, base_save_path, generate_rey_names=False):
-        self._update_status(f"Створення CSV для точок: {os.path.basename(base_save_path)}...", self.C_BUTTON_HOVER)
-        headers = ["sidc", "id", "quantity", "name", "observation_datetime", "reliability_credibility",
-                   "staff_comments", "platform_type", "direction", "speed", "coordinates"]
-        SIDC_BY_COLOR = {"Brown": "10036600001100000000", "Green": "10046600001100000000",
-                         "Red": "10066600001100000000", "Yellow": "10016600001100000000"}
-        DEFAULT_SIDC_POINTS = "10016600006099000000"
+    def get_best_color_for_item(self, item):
+        ru_color_map = {
+            "фиолетовый": "Purple",
+            "красный": "Red",
+            "розовый": "Pink",
+            "темно-фиолетовый": "DeepPurple",
+            "индиго": "Indigo",
+            "синий": "Blue",
+            "бирюзовый": "Teal",
+            "зеленый": "Green",
+            "салатовый": "LightGreen",
+            "лаймовый": "Lime",
+            "желтый": "Yellow",
+            "янтарный": "Amber",
+            "оранжевый": "Orange",
+            "насыщенно-оранжевый": "DeepOrange",
+            "коричневый": "Brown",
+            "сине-серый": "BlueGrey",
+            "черный": "Black",
+            "белый": "White",
+            "голубой": "Cyan",
+        }
+        # 1. milgeo:meta:color
+        color = item.get('milgeo:meta:color')
+        if color:
+            if isinstance(color, list): color = color[0] if color else ""
+            color_l = str(color).strip().lower()
+            if color_l in ru_color_map:
+                return ru_color_map[color_l]
+            # hex-код
+            if color_l.startswith("#"):
+                return self.convert_color(color_l, "name", True)
+            # англійська
+            if color_l.capitalize() in self.colors:
+                return color_l.capitalize()
+        # 2. color
+        color = item.get('color')
+        if color:
+            if isinstance(color, list): color = color[0] if color else ""
+            color_l = str(color).strip().lower()
+            if color_l in ru_color_map:
+                return ru_color_map[color_l]
+            if color_l.startswith("#"):
+                return self.convert_color(color_l, "name", True)
+            if color_l.capitalize() in self.colors:
+                return color_l.capitalize()
+        # 3. global_meta
+        global_meta = item.get('global_meta', {})
+        if global_meta:
+            color = global_meta.get('color')
+            if color:
+                color_l = str(color).strip().lower()
+                if color_l in ru_color_map:
+                    return ru_color_map[color_l]
+                if color_l.startswith("#"):
+                    return self.convert_color(color_l, "name", True)
+                if color_l.capitalize() in self.colors:
+                    return color_l.capitalize()
+        # 4. icon
+        icon = item.get('icon')
+        if icon:
+            for cname in self.colors.keys():
+                if cname.lower() in icon.lower():
+                    return cname
+        # 5. sym
+        sym = item.get('sym')
+        if sym:
+            for cname in self.colors.keys():
+                if cname.lower() in sym.lower():
+                    return cname
+        # 6. name (і російською, і англійською)
+        name = item.get('name', '')
+        name_l = name.lower()
+        for ru_name, en_name in ru_color_map.items():
+            if ru_name in name_l:
+                return en_name
+        for cname in self.colors.keys():
+            if cname.lower() in name_l:
+                return cname
+        return "White"
 
-        if not contents_list: return False
+    def create_csv_for_points_simple(self, contents_list, base_save_path):
+        self._update_status(f"Створення CSV (простий) для точок: {os.path.basename(base_save_path)}...",
+                            self.C_BUTTON_HOVER)
+        headers = [
+            "color", "coordinates", "milgeo:meta:color", "milgeo:meta:creator", "milgeo:meta:creator_url",
+            "milgeo:meta:desc", "milgeo:meta:name", "name", "observation_datetime", "sidc"
+        ]
+
+        if not contents_list:
+            self._update_status(f"Немає даних для CSV: {os.path.basename(base_save_path)}", warning=True)
+            return False
+
         try:
-            total_items = len(contents_list);
-            point_counter = 1
+            total_items = len(contents_list)
             for chunk_index, i in enumerate(range(0, total_items, self.CSV_CHUNK_SIZE)):
                 chunk_contents = contents_list[i:i + self.CSV_CHUNK_SIZE]
                 current_save_path = self._get_chunked_save_path(base_save_path, chunk_index)
@@ -2408,26 +2505,43 @@ class Main:
                     writer = csv.writer(f_out, quoting=csv.QUOTE_ALL)
                     writer.writerow(headers)
                     for item in chunk_contents:
-                        if item.get('geometry_type') != 'Point': continue
-                        sidc = item.get('milgeo:meta:sidc') or SIDC_BY_COLOR.get(item.get('milgeo:meta:color', ''),
-                                                                                 DEFAULT_SIDC_POINTS)
-                        name = f"РЕЙ {point_counter}" if generate_rey_names else item.get('name', '')
-                        comments_parts = [
-                            f"Оригінальна назва: {item.get('name', '')}"] if generate_rey_names and item.get(
-                            'name') else []
-                        if item.get('original_location_data', {}).get('ts'): comments_parts.append(
-                            f"Час: {datetime.fromtimestamp(item['original_location_data']['ts'], timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}")
-                        if item.get('milgeo:meta:color'): comments_parts.append(
-                            f"Колір: {self.convert_color(item['milgeo:meta:color'], 'str_rgb', True)},1")
-                        if item.get('milgeo:meta:desc'): comments_parts.append(item['milgeo:meta:desc'])
-                        staff_comments = "; ".join(comments_parts)
+                        if item.get('geometry_type') != 'Point':
+                            continue
+
+                        color_str = self.convert_color(self.get_best_color_for_item(item), 'str_rgb', True) + ',1'
                         wkt_string = f"POINT ({item.get('lon', 0.0)} {item.get('lat', 0.0)})"
-                        writer.writerow([sidc, "", "", name, "", "", staff_comments, "", "", "", wkt_string])
-                        point_counter += 1
-            self._update_status(f"Файли CSV (Points) успішно збережено.", self.C_ACCENT_DONE)
+
+                        def meta_json(val):
+                            if isinstance(val, list):
+                                return json.dumps(val, ensure_ascii=False)
+                            elif val is None or val == "":
+                                return "[]"
+                            else:
+                                return json.dumps([val], ensure_ascii=False)
+
+                        meta_color = meta_json(item.get('milgeo:meta:color'))
+                        meta_creator = meta_json(item.get('milgeo:meta:creator'))
+                        meta_creator_url = meta_json(item.get('milgeo:meta:creator_url'))
+                        meta_desc = meta_json(item.get('milgeo:meta:desc'))
+                        meta_name = meta_json(item.get('milgeo:meta:name'))
+                        name = item.get('name', '')
+                        ts = item.get('original_location_data', {}).get('ts')
+                        observation_datetime = ""
+                        if ts:
+                            observation_datetime = datetime.fromtimestamp(ts, timezone.utc).strftime(
+                                '%Y-%m-%dT%H:%M:%S')
+                        sidc = item.get('milgeo:meta:sidc') or ""
+
+                        row = [
+                            color_str, wkt_string, meta_color, meta_creator, meta_creator_url,
+                            meta_desc, meta_name, name, observation_datetime, sidc
+                        ]
+                        writer.writerow(row)
+            self._update_status(f"Файли CSV (простий) успішно збережено.", self.C_ACCENT_DONE)
             return True
         except Exception as e:
-            self._update_status(f"Помилка CSV: {e}", error=True); return False
+            self._update_status(f"Помилка CSV: {e}", error=True)
+            return False
 
     def create_csv_for_set(self, contents_list, base_save_path):
         self._update_status(f"Створення CSV для SET: {os.path.basename(base_save_path)}...", self.C_BUTTON_HOVER)
