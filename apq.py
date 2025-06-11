@@ -4,6 +4,34 @@ import time
 import base64
 import sys
 from typing import Optional, Callable
+from enum import IntEnum
+from dataclasses import dataclass, field
+import re # Додано для використання в _get_node (re.sub)
+
+class BlockType(IntEnum):
+    NODE = 0x01
+    ENTRY = 0x02
+    LIST = 0x03
+    DATA = 0x04
+    ADDITIONAL = 0x05
+    METADATA = 0x06
+
+@dataclass
+class Node:
+    id: int
+    type: BlockType
+    name: str = ""
+    children: list = field(default_factory=list)
+    extra: dict = field(default_factory=dict)
+
+    @staticmethod
+    def from_bytes(data: bytes, offset=0):
+        # розбір header, перевірка сигнатур, розмірів
+        pass 
+
+    def to_bytes(self):
+        # серіалізація з урахуванням специфікації
+        pass 
 
 COLORS_CONSOLE = {
     'E': '\033[91m',  # Червоний
@@ -555,15 +583,40 @@ class ApqFile(Base):
             return None
         self.debug('nWaypoints=%s', n_wp)
         for i in range(n_wp):
-            # Pass the global meta of the current file (e.g., SET or RTE file's global meta)
-            # to be combined with individual waypoint's meta.
-            # For this, ApqFile's global meta needs to be available or passed down.
-            # Assuming self.data_parsed['meta'] is not yet populated here, but self.version and self._file_type are.
-            # We will rely on _create_point_dict inside _normalize_apq_data to handle meta merging correctly.
             m = self._get_metadata()
             l = self._get_location()
+            
+            # Додаткові поля, які можуть бути після Location для Waypoint в SET/RTE
+            current_icon_id = None
+            current_color_int = None
+
+            # Перевіряємо наявність icon_id (1 байт)
+            if self._tell() + 1 <= self.rawsize:
+                icon_id_byte = self._getval('byte')
+                if icon_id_byte is not None:
+                    current_icon_id = icon_id_byte
+                    self.debug(f"SET/RTE: Знайдено icon_id для waypoint {i}: {icon_id_byte}")
+
+            # Перевіряємо наявність color (int, 4 байти)
+            if self._tell() + 4 <= self.rawsize:
+                try:
+                    color_int_val = self._getval('int')
+                    if color_int_val is not None:
+                        current_color_int = color_int_val
+                        self.debug(f"SET/RTE: Знайдено color (int) для waypoint {i}: {color_int_val} (0x{color_int_val:08x})")
+                except Exception as e:
+                    self.debug(f"SET/RTE: Помилка читання color (int) для waypoint {i}: {e}")
+
             if m is None or l is None: self.error(f"Помилка парсингу waypoint {i + 1}."); return None
-            wp_list.append({'meta': m, 'location': l})
+            
+            # Додаємо icon_id та color_int до даних точки
+            wp_data = {'meta': m, 'location': l}
+            if current_icon_id is not None:
+                wp_data['icon_id'] = current_icon_id
+            if current_color_int is not None:
+                wp_data['color_int'] = current_color_int
+            
+            wp_list.append(wp_data)
         return wp_list
 
     def _get_locations(self):  # For ARE files
@@ -615,14 +668,51 @@ class ApqFile(Base):
 
     def _parse_wpt(self):
         self.debug(f"Розбір WPT: {self.path or self.rawname}")
-        h_size = self._check_header(2, 101);  # WPT v2 or v101
+        h_size = self._check_header(2, 101) # WPT v2 or v101
         if h_size is None: return False
-        # Header in WPT v101 seems to contain main metadata, then another metadata block for the point itself.
-        # In v2, header is simpler.
-        if self.version > 100:  # v101
-            self.data_parsed['meta'] = self._get_metadata()  # глобальні метадані
-            self.data_parsed['location'] = self._get_location()  # location одразу після meta
-            return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('location') is not None)
+
+        # AlpineQuest WPT files (v2, v101) structure:
+        # File Magic + Version (int)
+        # Header Size (int)
+        # Metadata block (variable size)
+        # Location block (variable size)
+        # Optional: Icon ID (byte)
+        # Optional: Color (int, ARGB)
+        
+        # 1. Читаємо головні метадані
+        self.data_parsed['meta'] = self._get_metadata()
+        if self.data_parsed['meta'] is None:
+            self.error("Не вдалося розпарсити метадані для WPT.")
+            return False
+
+        # 2. Читаємо дані про місцеположення
+        self.data_parsed['location'] = self._get_location()
+        if self.data_parsed['location'] is None:
+            self.error("Не вдалося розпарсити місцеположення для WPT.")
+            return False
+
+        # 3. Читаємо icon_id (якщо є, 1 байт)
+        # Перевіряємо, чи є достатньо байтів для icon_id
+        if self._tell() + 1 <= self.rawsize:
+            icon_id_val = self._getval('byte')
+            if icon_id_val is not None:
+                self.data_parsed['icon_id'] = icon_id_val
+                self.debug(f"Знайдено icon_id: {icon_id_val}")
+        
+        # 4. Читаємо колір як ціле число (якщо є, 4 байти)
+        # Цей блок повинен читатися ТІЛЬКИ якщо ми ще не досягли кінця файлу
+        if self._tell() + 4 <= self.rawsize:
+            try:
+                color_int_val = self._getval('int') # Читаємо 4 байти як int
+                if color_int_val is not None:
+                    self.data_parsed['color_int'] = color_int_val
+                    self.debug(f"Знайдено color (int): {color_int_val} (0x{color_int_val:08x})")
+            except Exception as e:
+                self.debug(f"Помилка читання color (int) в WPT: {e}")
+                # Продовжуємо, навіть якщо не вдалося прочитати колір
+        
+        # Успіх парсингу, якщо метадані та місцеположення присутні.
+        return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('location') is not None)
 
     def _parse_set(self):
         self.debug(f"Розбір SET: {self.path or self.rawname}")
@@ -632,8 +722,6 @@ class ApqFile(Base):
             if h_size > 0: self._seek(self._tell() + h_size)
         else:  # v101
             _ = self._get_metadata()  # File-level/creator meta
-            # header_size for v101 should point after this first meta block
-            # No explicit seek based on h_size needed here as it's handled by _get_metadata logic for v3 meta
         self.data_parsed['meta'] = self._get_metadata()  # This is the SET's own metadata
         self.data_parsed['waypoints'] = self._get_waypoints()
         return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('waypoints') is not None)
@@ -651,7 +739,7 @@ class ApqFile(Base):
         return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('waypoints') is not None)
 
     def _parse_are(self):
-        self.debug(f"Синтаксичний аналіз ARE: {self.path or self.rawname}")  # Corrected "Синтаксичний аналіз:"
+        self.debug(f"Синтаксичний аналіз ARE: {self.path or self.rawname}")
         h_size = self._check_header(2)  # ARE only has v2
         if h_size is None: return False
         if h_size > 0: self._seek(self._tell() + h_size)
@@ -667,7 +755,6 @@ class ApqFile(Base):
             if h_size > 0: self._seek(self._tell() + h_size)
         else:  # v101
             _ = self._get_metadata()  # File-level/creator meta
-            # header_size for v101 should point after this first meta block
         self.data_parsed['meta'] = self._get_metadata()  # Track's own metadata
         if self.data_parsed.get('meta') is None:
             self.error("Не вдалося розпарсити головні метадані треку.");
@@ -771,7 +858,8 @@ class ApqFile(Base):
             return None
 
         prev_offs = self._tell()
-        self._seek(meta_offset_val + 0x20)  # Meta data starts after a 0x20 byte header in the meta block
+        # Згідно зі специфікацією, метадані починаються після 0x20 байт у блоці метаданих.
+        self._seek(meta_offset_val + 0x20)
         node_meta = self._get_metadata()
         self._seek(prev_offs)  # Restore offset to continue reading node structure
 
@@ -798,8 +886,6 @@ class ApqFile(Base):
             # The structure for table nodes is more complex and might involve hash lookups.
             # This simplified parsing assumes entries are still somewhat linear for now.
             # A more accurate parsing would require understanding the hash table structure.
-            # For now, we read nChild and nData assuming they are directly available.
-            # This part might need significant refinement if LDK uses complex hash tables.
             self.warning("LDK: Обробка вузла типу 'таблиця' (0x00045555) може бути неповною.")
             # Attempt to read nChild and nData, assuming a simple structure first
             table_hdr_simple = self._getvalmulti(nChild='int', nData='int')
@@ -854,7 +940,7 @@ class ApqFile(Base):
             child_node['order'] = entry_def['_ix'];
             node_obj['nodes'].append(child_node)
 
-        type_map_ldk = {0x65: 'wpt', 0x66: 'set', 0x67: 'rte', 0x68: 'trk', 0x69: 'are'}
+        type_map_ldk = {0x65: 'wpt', 0x66: 'set', 0x67: 'rte', 0x68: 'trk', 0x69: 'are'} 
         ldk_original_filename = self.path or self.rawname or "unknown.ldk"
         ldk_base_fn_for_contained = os.path.splitext(os.path.basename(ldk_original_filename))[0]
 
@@ -904,7 +990,12 @@ class ApqFile(Base):
         if self.parse_successful:
             # data_parsed should contain the direct output of the _parse_xxx method
             if self._file_type == 'wpt':
-                output_data.update({'meta': self.data_parsed.get('meta'), 'location': self.data_parsed.get('location')})
+                output_data.update({
+                    'meta': self.data_parsed.get('meta'),
+                    'location': self.data_parsed.get('location'),
+                    'icon_id': self.data_parsed.get('icon_id'), # Додано icon_id
+                    'color_int': self.data_parsed.get('color_int') # Додано color_int
+                })
             elif self._file_type in ['set', 'rte']:  # Grouped SET and RTE
                 output_data.update(
                     {'meta': self.data_parsed.get('meta'), 'waypoints': self.data_parsed.get('waypoints')})
