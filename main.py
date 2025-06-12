@@ -3,8 +3,8 @@ import random
 import os
 import io
 import ast
-import xlsxwriter  # тип: ігнорувати
-import openpyxl  # тип: ігнорувати
+import xlsxwriter  # type: ignore
+import openpyxl  # type: ignore
 import time
 import math
 import tkinter
@@ -23,10 +23,11 @@ import sys
 import re
 import ctypes
 import uuid
+from typing import Any, List, Dict, Optional, Tuple
 
-# Опційно для кольорів у консолі для Base
+# Optional for console colors for Base
 try:
-    import colorama  # тип: ігнорувати
+    import colorama  # type: ignore
 
     colorama.init()
     COLORS_CONSOLE = {
@@ -39,19 +40,15 @@ except ImportError:
     COLORS_CONSOLE = {key: '' for key in ['W', 'E', 'P', 'D', 'T', 'c', 'o']}
 
 
-def xml_escape(text_to_escape):
+def xml_escape(text_to_escape: Any) -> str:
     """Correctly escapes text for XML content."""
     if not isinstance(text_to_escape, str):
         text_to_escape = str(text_to_escape)
-    # Use the standard library for robust XML escaping
-    return xml_escape_util(text_to_escape, entities={
-        "'": "'",
-        "\"": "\""
-    })
+    return xml_escape_util(text_to_escape, entities={"'": "'", "\"": "\""})
 
 
-# --- Клас Tooltip ---
 class Tooltip:
+    """Tooltip for Tkinter widgets."""
     def __init__(self, widget, text, background="#313335", foreground="#EAEAEA"):
         self.widget = widget
         self.text = text
@@ -79,13 +76,13 @@ class Tooltip:
         self.tooltip_window = None
 
 
-# --- Клас Base для ApqFile ---
 class Base:
-    def __init__(self, verbosity=0, gui_logger_func=None):
+    """Base logging class with verbosity and optional GUI logger."""
+    def __init__(self, verbosity: int = 0, gui_logger_func=None):
         self.verbosity = verbosity
         self.gui_logger_func = gui_logger_func
 
-    def _log(self, level_char, message, *args):
+    def _log(self, level_char: str, message: str, *args):
         level_map_verbosity = {'E': -2, 'W': -1, 'P': 0, 'D': 1, 'T': 2}
         if self.verbosity < level_map_verbosity.get(level_char, 0):
             return
@@ -104,22 +101,22 @@ class Base:
 
         print(COLORS_CONSOLE.get(level_char, '') + log_message + COLORS_CONSOLE.get('o', ''), file=sys.stderr)
 
-    def error(self, message, *args):
+    def error(self, message: str, *args):
         self._log('E', message, *args)
 
-    def warning(self, message, *args):
+    def warning(self, message: str, *args):
         self._log('W', message, *args)
 
-    def print(self, message, *args):
+    def print(self, message: str, *args):
         self._log('P', message, *args)
 
-    def debug(self, message, *args):
+    def debug(self, message: str, *args):
         self._log('D', message, *args)
 
-    def trace(self, message, *args):
+    def trace(self, message: str, *args):
         self._log('T', message, *args)
 
-    def trace_hexdump(self, data_bytes):
+    def trace_hexdump(self, data_bytes: bytes):
         if self.verbosity >= 2:
             data_size = len(data_bytes)
             for offs in range(0, data_size, 16):
@@ -135,17 +132,17 @@ class Base:
                 ascii_str = "".join(chr(b) if 32 <= b <= 126 else '.' for b in s_bytes)
                 self.trace(f'0x{offs:08x} {hex_str:<47} |{ascii_str:<16}|')
 
-    def _load_raw(self, path_to_load):
+    def _load_raw(self, path_to_load: str) -> Optional[bytes]:
         if not os.path.isfile(path_to_load) or not os.access(path_to_load, os.R_OK):
-            self.warning("Неможливо прочитати '%s'!", path_to_load);
+            self.warning("Неможливо прочитати '%s'!", path_to_load)
             return None
         try:
             with open(path_to_load, 'rb') as f_in:
                 raw_data_content = f_in.read()
-            self.trace("Прочитано '%s': %d байт.", path_to_load, len(raw_data_content));
+            self.trace("Прочитано '%s': %d байт.", path_to_load, len(raw_data_content))
             return raw_data_content
         except IOError as e_io:
-            self.warning("Помилка читання '%s': %s", path_to_load, e_io);
+            self.warning("Помилка читання '%s': %s", path_to_load, e_io)
             return None
 
 
@@ -894,15 +891,18 @@ class ApqFile(Base):
 
 # --- Клас Main ---
 class Main:
-    MAX_FILES = 100
-    CSV_CHUNK_SIZE = 2000
+    """Main GUI application for batch geodata conversion and processing."""
+
+    MAX_FILES: int = 100
+    CSV_CHUNK_SIZE: int = 2000
 
     def __init__(self):
-        self.program_version = "8.5.0_smart_color"
-        self.empty = "Не вибрано"
-        self.file_ext, self.file_name = None, None
+        self.program_version: str = "8.5.0_smart_color"
+        self.empty: str = "Не вибрано"
+        self.file_ext: Optional[str] = None
+        self.file_name: Optional[str] = None
 
-        self.list_of_formats = [".geojson", ".kml", ".kmz", ".kme", ".gpx", ".xlsx", ".csv", ".csv(макет)"]
+        self.list_of_formats = [".geojson", ".kml", ".kml", ".kmz", ".kme", ".gpx", ".xlsx", ".csv", ".csv(макет)"]
         self.supported_read_formats = [".kml", ".kmz", ".kme", ".gpx", ".xlsx", ".csv", ".scene", ".wpt", ".set",
                                        ".rte", ".are", ".trk", ".ldk"]
         self.numerations = ["За найближчими сусідями", "За змійкою", "За відстаню від кута", "За відстаню від границі",
@@ -925,38 +925,34 @@ class Main:
             "Amber": "Бурштиновий", "Orange": "Помаранчевий", "DeepOrange": "Насичено-помаранчевий",
             "Brown": "Коричневий", "BlueGrey": "Синьо-сірий", "Black": "Чорний", "White": "Білий"
         }
-        
-        # Словник для пошуку кольорів за ключовими словами (українською та російською)
+
         self.color_keyword_map = {
-            # Ukrainian
             "червоний": "Red", "рожевий": "Pink", "фіолетовий": "Purple", "темно-фіолетовий": "DeepPurple",
             "індиго": "Indigo", "синій": "Blue", "блакитний": "Cyan", "бірюзовий": "Teal",
             "зелений": "Green", "салатовий": "LightGreen", "лаймовий": "Lime", "жовтий": "Yellow",
             "бурштиновий": "Amber", "помаранчевий": "Orange", "насичено-помаранчевий": "DeepOrange",
             "коричневий": "Brown", "синьо-сірий": "BlueGrey", "чорний": "Black", "білий": "White", "голубий": "Cyan",
-            # Russian (для сумісності)
             "красный": "Red", "розовый": "Pink", "фиолетовый": "Purple",
             "синий": "Blue", "зеленый": "Green", "желтый": "Yellow", "оранжевый": "Orange",
             "коричневый": "Brown", "черный": "Black", "белый": "White", "голубой": "Cyan"
         }
-        
-        # Попередньо розраховані RGB значення палітри для ефективного пошуку найближчого кольору
+
         self._palette_rgb = {
             name: (int(hx[1:3], 16), int(hx[3:5], 16), int(hx[5:7], 16))
             for name, hx in self.colors.items()
         }
+        self.file_list: List[Dict[str, Any]] = []
+        self.list_is_visible: bool = False
+        self.output_directory_path: str = self.empty
 
-        self.file_list = []
-        self.list_is_visible = False
-        self.output_directory_path = self.empty
-
-        self.font, self.C_BACKGROUND, self.C_SIDEBAR, self.C_BUTTON, self.C_BUTTON_HOVER, self.C_TEXT = ("Courier New", 11, "bold"), "#2B2B2B", "#3C3C3C", "#556B2F", "#6B8E23", "#F5F5F5"
+        self.font = ("Courier New", 11, "bold")
+        self.C_BACKGROUND, self.C_SIDEBAR, self.C_BUTTON, self.C_BUTTON_HOVER, self.C_TEXT = "#2B2B2B", "#3C3C3C", "#556B2F", "#6B8E23", "#F5F5F5"
         self.C_ACCENT_SUCCESS, self.C_ACCENT_DONE, self.C_STATUS_DEFAULT, self.C_ACCENT_ERROR = "#6B8E23", "#FFBF00", "#4F4F4F", "#8B0000"
 
         self.main_window = tk.Tk()
         self.names_agree = tk.BooleanVar(value=False)
         self.exceptions_agree = tk.BooleanVar(value=False)
-        self.chosen_numeration = tk.StringVar(value="За найближчими сусідями")
+        self.chosen_numeration = tk.StringVar(value="За найближчими сусідами")
         self.chosen_translation = tk.StringVar(value="Не повертати")
 
         self.main_window.title(f"Nexus v{self.program_version}")
@@ -975,8 +971,8 @@ class Main:
         self._configure_styles()
         self._build_main_ui()
 
-        self.input_file_path = None
-        self.output_directory_path = self.empty
+        self.input_file_path: Optional[str] = None
+        self.output_directory_path: str = self.empty
 
     def _configure_styles(self):
         style = ttk.Style(self.main_window)
@@ -2082,13 +2078,14 @@ class Main:
         except xlsxwriter.exceptions.FileCreateError:
             return False
             
-    def create_csv(self, contents_list, save_path):
+    def create_csv(self, contents_list: List[Dict[str, Any]], save_path: str) -> bool:
+        """
+        Dispatcher for CSV creation.
+        """
         if not contents_list:
             self._update_status(f"Немає даних для запису в CSV.", warning=True)
             return False
-        has_lines_or_polygons = any(
-            item.get('geometry_type') in ['LineString', 'Polygon'] for item in contents_list
-        )
+        has_lines_or_polygons = any(item.get('geometry_type') in ['LineString', 'Polygon'] for item in contents_list)
         if has_lines_or_polygons:
             return self.create_csv_for_lines_and_polygons(contents_list, save_path)
         else:
@@ -2096,15 +2093,14 @@ class Main:
 
     # --- COLOR METHODS ---
     @staticmethod
-    def _color_distance(rgb1, rgb2):
-        """Розраховує Евклідову відстань між двома кольорами в RGB-просторі."""
+    def _color_distance(rgb1: Tuple[int, int, int], rgb2: Tuple[int, int, int]) -> float:
+        """Calculate Euclidean distance between two RGB colors."""
         return math.sqrt(sum([(c1 - c2) ** 2 for c1, c2 in zip(rgb1, rgb2)]))
 
-    def _find_closest_color_name(self, rgb_tuple):
-        """Знаходить ім'я найближчого кольору з палітри до заданого RGB-кортежу."""
+    def _find_closest_color_name(self, rgb_tuple: Tuple[int, int, int]) -> str:
+        """Finds the closest color name from the palette."""
         if not isinstance(rgb_tuple, (list, tuple)) or len(rgb_tuple) < 3:
             return "White"
-        
         rgb_tuple = tuple(max(0, min(255, c)) for c in rgb_tuple[:3])
         min_dist = float('inf')
         closest_name = "White"
@@ -2115,14 +2111,13 @@ class Main:
                 closest_name = name
         return closest_name
 
-    def convert_color(self, color_value, target_format='name'):
+    def convert_color(self, color_value: Any, target_format: str = 'name') -> str:
         """
-        Надійно конвертує представлення кольору (назва, hex, rgb-кортеж)
-        у стандартизований колір з палітри (назву або hex).
+        Robustly converts color representation (name, hex, rgb-tuple)
+        to standardized palette color (name or hex).
         """
         if not color_value:
             return "White" if target_format == 'name' else self.colors["White"]
-
         if isinstance(color_value, str) and color_value.capitalize() in self.colors:
             color_name_en = color_value.capitalize()
         else:
@@ -2135,7 +2130,8 @@ class Main:
                 hex_match = re.search(r'#?([0-9a-f]{6}|[0-9a-f]{3})\b', value_lower)
                 if hex_match:
                     hex_str = hex_match.group(1)
-                    if len(hex_str) == 3: hex_str = "".join([c * 2 for c in hex_str])
+                    if len(hex_str) == 3:
+                        hex_str = "".join([c * 2 for c in hex_str])
                     rgb_tuple = (int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16))
                 else:
                     rgba_match = re.search(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', value_lower)
@@ -2148,12 +2144,12 @@ class Main:
                                 break
             if rgb_tuple:
                 color_name_en = self._find_closest_color_name(rgb_tuple)
-            
             if not color_name_en:
                 color_name_en = "White"
-        
-        if target_format == 'name': return color_name_en
-        elif target_format == 'hex': return self.colors.get(color_name_en, self.colors["White"])
+        if target_format == 'name':
+            return color_name_en
+        elif target_format == 'hex':
+            return self.colors.get(color_name_en, self.colors["White"])
         elif target_format == 'str_rgb':
             h = self.colors.get(color_name_en, self.colors["White"]).lstrip('#')
             return f"{int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)}"
@@ -2361,14 +2357,18 @@ class Main:
         a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
         return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
-    def apply_snake_numeration(self, content_list):
-        if not content_list: return content_list
+    def apply_snake_numeration(self, content_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Assigns serial numbers to points 'snake' style: line by line."""
+        if not content_list:
+            return content_list
         points = [p for p in content_list if 'lat' in p and 'lon' in p]
-        if not points: return content_list
+        if not points:
+            return content_list
         min_lon, max_lon = min(p['lon'] for p in points), max(p['lon'] for p in points)
         min_lat, max_lat = min(p['lat'] for p in points), max(p['lat'] for p in points)
-        points.sort(key=lambda p: (int((p['lat'] - min_lat) / (max_lat - min_lat) * 10),
-                                   p['lon'] if int((p['lat'] - min_lat) / (max_lat - min_lat) * 10) % 2 == 0 else -p['lon']))
+        lat_range = max_lat - min_lat if max_lat != min_lat else 1e-6  # Avoid division by zero
+        points.sort(key=lambda p: (int((p['lat'] - min_lat) / lat_range * 10),
+                                   p['lon'] if int((p['lat'] - min_lat) / lat_range * 10) % 2 == 0 else -p['lon']))
         free_numbers = self.generate_free_numbers_list(len(points))
         for i, item in enumerate(points):
             item['name'] = free_numbers[i]
