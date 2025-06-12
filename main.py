@@ -1363,10 +1363,14 @@ class Main:
 
             final_name = effective_meta.get('name', f"{default_name_prefix}_{item_idx + 1}")
             point_type_val = effective_meta.get('sym', effective_meta.get('icon', 'Landmark'))
-            
-            # Ось виправлений рядок:
-            point_color_name = self.convert_color(effective_meta.get('color', 'White'), "name")
-            
+            # Оновлено: надійний вибір кольору з пріоритетом
+            point_color_name = self.convert_color(
+                effective_meta.get('color') or
+                item_meta_data.get('color') or
+                (source_file_global_meta_for_item.get('color') if source_file_global_meta_for_item else None) or
+                "White",
+                "name"
+            )
             description_val = effective_meta.get('comment', effective_meta.get('description', ''))
 
             extra_desc_parts = []
@@ -1388,6 +1392,7 @@ class Main:
                 "type": point_type_val,
                 "description": full_description if full_description else None,
                 "geometry_type": "Point",
+                "color": point_color_name,  # <--- ДОДАНО
                 "original_location_data": loc_data,
                 "apq_original_type": apq_source_file_type_for_item,
                 'milgeo:meta:name': final_name,
@@ -1399,6 +1404,7 @@ class Main:
             }
             return entry
 
+        # --- WPT
         if apq_type == 'wpt':
             loc = apq_parsed_data.get('location')
             point = _create_point_dict(loc, global_meta, "Waypoint",
@@ -1406,6 +1412,7 @@ class Main:
                                        source_file_global_meta_for_item=global_meta)
             if point: normalized_content.append(point)
 
+        # --- SET, RTE
         elif apq_type in ['set', 'rte']:
             waypoints_list = apq_parsed_data.get('waypoints', [])
             default_prefix = global_meta.get('name', apq_type.upper())
@@ -1417,10 +1424,13 @@ class Main:
                 )
                 if point: normalized_content.append(point)
 
+        # --- ARE (полігон)
         elif apq_type == 'are':
             locations_list = apq_parsed_data.get('locations', [])
             area_name = global_meta.get('name', 'Area')
-            area_color_name = self.convert_color(global_meta.get('color', 'Blue'), "name", True)
+            area_color_name = self.convert_color(
+                global_meta.get('color') or "Blue", "name", True
+            )
             area_description = global_meta.get('comment', global_meta.get('description', ''))
             area_points_data_for_polygon = [loc for loc in locations_list if loc and loc.get('lon') is not None]
 
@@ -1429,6 +1439,7 @@ class Main:
                     'name': area_name, 'type': 'Area', 'geometry_type': 'Polygon',
                     'points_data': area_points_data_for_polygon,
                     'apq_original_type': 'are',
+                    'color': area_color_name,  # <--- ДОДАНО
                     'milgeo:meta:name': area_name, 'milgeo:meta:color': area_color_name,
                     'milgeo:meta:desc': area_description,
                     'milgeo:meta:creator': global_meta.get('creator'),
@@ -1437,8 +1448,10 @@ class Main:
                 }
                 normalized_content.append(poly_item)
 
+        # --- TRK (POI + segments)
         elif apq_type == 'trk':
             track_default_name = global_meta.get('name', 'Track')
+            # POI точки
             for idx, poi_entry in enumerate(apq_parsed_data.get('waypoints', [])):
                 point = _create_point_dict(
                     poi_entry.get('location'), poi_entry.get('meta', {}),
@@ -1447,7 +1460,7 @@ class Main:
                     source_file_global_meta_for_item=global_meta
                 )
                 if point: normalized_content.append(point)
-
+            # Сегменти (лінії)
             segments_data = apq_parsed_data.get('segments', [])
             for seg_idx, segment_item in enumerate(segments_data):
                 seg_locs_data = segment_item.get('locations', [])
@@ -1458,7 +1471,9 @@ class Main:
                 effective_seg_meta.update(seg_meta_data)
 
                 segment_name = effective_seg_meta.get('name', f"{track_default_name}_Segment_{seg_idx + 1}")
-                segment_color_name = self.convert_color(effective_seg_meta.get('color', 'Red'), "name", True)
+                segment_color_name = self.convert_color(
+                    effective_seg_meta.get('color') or global_meta.get('color') or "Red", "name", True
+                )
                 segment_description = effective_seg_meta.get('comment', effective_seg_meta.get('description', ''))
                 segment_points_for_line = [loc for loc in seg_locs_data if loc and loc.get('lon') is not None]
 
@@ -1467,6 +1482,7 @@ class Main:
                         'name': segment_name, 'geometry_type': 'LineString',
                         'points_data': segment_points_for_line,
                         'apq_original_type': 'trk',
+                        'color': segment_color_name,  # <--- ДОДАНО
                         'milgeo:meta:name': segment_name, 'milgeo:meta:color': segment_color_name,
                         'milgeo:meta:desc': segment_description,
                         'milgeo:meta:creator': global_meta.get('creator'),
