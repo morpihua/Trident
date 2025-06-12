@@ -28,26 +28,26 @@ from typing import Any, List, Dict, Optional, Tuple
 # Список підтримуваних кольорів для експорту (RGB)
 # Формат: (R, G, B): "назва" (якщо треба), SIDC
 SUPPORTED_COLORS = {
-    (77, 192, 77):      ("ЗЕЛЕНИЙ",   None),  # SIDC для ліній задаєш окремо
-    (0, 0, 0):          ("ЧОРНИЙ",    None),
-    (229, 57, 114):     ("МАЛИНОВИЙ", None),
-    (255, 255, 255):    ("БІЛИЙ",     None),
-    (54, 69, 77):       ("СІРИЙ",     None),
-    (117, 79, 229):     ("ФІОЛЕТОВИЙ",None),
-    (255, 85, 51):      ("ЧЕРВОНИЙ",  None),
-    (184, 82, 204):     ("ФІОЛЕТОВИЙ2",None),
-    (55, 82, 217):      ("СИНІЙ",     None),
-    (89, 115, 128):     ("СІРИЙ2",    None),
-    (179, 179, 179):    ("СВІТЛОСІРИЙ",None),
-    (37, 164, 254):     ("БЛАКИТНИЙ", None),
-    (255, 147, 39):     ("ОРАНЖЕВИЙ", None),
-    (176, 228, 103):    ("САЛАТОВИЙ", None),
-    (128, 99, 89):      ("КОРИЧНЕВИЙ",None),
-    (59, 213, 231):     ("БІРЮЗОВИЙ", None),
-    (35, 140, 131):     ("БІРЮЗОВИЙ2",None),
-    (255, 215, 13):     ("ЖОВТИЙ",    None),
-    (242, 61, 61):      ("ЧЕРВОНИЙ2", None),
-    (244, 255, 129):    ("ЛИМОННИЙ",  None),
+    (77, 192, 77): ("ЗЕЛЕНИЙ", None),  # SIDC для ліній задаєш окремо
+    (0, 0, 0): ("ЧОРНИЙ", None),
+    (229, 57, 114): ("МАЛИНОВИЙ", None),
+    (255, 255, 255): ("БІЛИЙ", None),
+    (54, 69, 77): ("СІРИЙ", None),
+    (117, 79, 229): ("ФІОЛЕТОВИЙ", None),
+    (255, 85, 51): ("ЧЕРВОНИЙ", None),
+    (184, 82, 204): ("ФІОЛЕТОВИЙ2", None),
+    (55, 82, 217): ("СИНІЙ", None),
+    (89, 115, 128): ("СІРИЙ2", None),
+    (179, 179, 179): ("СВІТЛОСІРИЙ", None),
+    (37, 164, 254): ("БЛАКИТНИЙ", None),
+    (255, 147, 39): ("ОРАНЖЕВИЙ", None),
+    (176, 228, 103): ("САЛАТОВИЙ", None),
+    (128, 99, 89): ("КОРИЧНЕВИЙ", None),
+    (59, 213, 231): ("БІРЮЗОВИЙ", None),
+    (35, 140, 131): ("БІРЮЗОВИЙ2", None),
+    (255, 215, 13): ("ЖОВТИЙ", None),
+    (242, 61, 61): ("ЧЕРВОНИЙ2", None),
+    (244, 255, 129): ("ЛИМОННИЙ", None),
 }
 
 # SIDC для точок/орієнтирів
@@ -56,93 +56,55 @@ POINT_SIDC = "10016600006099000000"
 # SIDC для ліній (приклад: заміни на свої!)
 LINES_SIDC_BY_COLOR = {
     # HEX: SIDC
-    "#ff5533": "10062500001101010000", # ЧЕРВОНИЙ
-    "#ffd70d": "10012500001101020000", # ЖОВТИЙ
-    "#3752d9": "10032500001101020000", # СИНІЙ
-    "#4dc04d": "10042500001101010000", # ЗЕЛЕНИЙ
-    "#000000": "10066600001100000000", # ЧОРНИЙ (унікальний випадок)
-    # ... Додавай свої відповідності HEX→SIDC для ліній!
+    "#ff5533": "10062500001101010000",  # ЧЕРВОНИЙ
+    "#ffd70d": "10012500001101020000",  # ЖОВТИЙ
+    "#3752d9": "10032500001101020000",  # СИНІЙ
+    "#4dc04d": "10042500001101010000",  # ЗЕЛЕНИЙ
+    "#000000": "10066600001100000000",  # ЧОРНИЙ (унікальний випадок)
 }
 
 # HEX для жовтого (за замовчуванням для "невідомих" маршрутів)
-DEFAULT_LINE_COLOR = (255, 215, 13)
-DEFAULT_LINE_HEX = "#ffd70d"
+DEFAULT_LINE_COLOR_TUPLE = (255, 215, 13)
+DEFAULT_LINE_HEX = '#ffd70d'
 DEFAULT_LINE_SIDC = LINES_SIDC_BY_COLOR[DEFAULT_LINE_HEX]
+
 
 def rgb_str_to_tuple(s):
     """Перетворює 'R,G,B[,A]' у (R,G,B)"""
-    parts = list(map(int, s.split(",")[:3]))
-    return tuple(parts)
+    try:
+        parts = list(map(int, s.split(",")[:3]))
+        return tuple(parts)
+    except (ValueError, AttributeError):
+        return DEFAULT_LINE_COLOR_TUPLE
+
 
 def rgb_to_hex(rgb):
     return '#{:02x}{:02x}{:02x}'.format(*rgb)
 
+
 def hex_to_rgb(hexstr):
     hexstr = hexstr.lstrip('#')
-    return tuple(int(hexstr[i:i+2], 16) for i in (0, 2, 4))
+    return tuple(int(hexstr[i:i + 2], 16) for i in (0, 2, 4))
+
 
 def color_distance(c1, c2):
     """Євклідова відстань для пошуку найближчого кольору"""
-    return sqrt(sum((a-b)**2 for a, b in zip(c1, c2)))
+    return sqrt(sum((a - b) ** 2 for a, b in zip(c1, c2)))
+
 
 def find_nearest_supported_color(rgb):
     """Знаходить найближчий підтримуваний колір"""
+    if not isinstance(rgb, (tuple, list)) or len(rgb) != 3:
+        return DEFAULT_LINE_COLOR_TUPLE
     nearest = min(SUPPORTED_COLORS.keys(), key=lambda c: color_distance(rgb, c))
     return nearest
+
 
 def get_line_sidc(hex_color):
     """SIDC для лінії за HEX"""
     hex_color = hex_color.lower()
     return LINES_SIDC_BY_COLOR.get(hex_color, DEFAULT_LINE_SIDC)
 
-def export_to_csv(objects, outfile="export.csv"):
-    """objects: список словників з полями type, coords, color, name тощо"""
-    with open(outfile, "w", newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        # Заголовки підлаштуй під твій формат!
-        writer.writerow([
-            "sidc", "id", "quantity", "name", "observation_datetime",
-            "reliability_credibility", "staff_comments", "platform_type",
-            "direction", "speed", "coordinates", "comment 1", "comment 2", "comment 3", "comment 4"
-        ])
-        for obj in objects:
-            if obj["type"] == "point":
-                # Кольори точок: автопідбір, якщо треба
-                rgb = rgb_str_to_tuple(obj["color"])
-                nearest_rgb = find_nearest_supported_color(rgb)
-                color_hex = rgb_to_hex(nearest_rgb)
-                # Створення WKT
-                coords = obj["coords"]
-                wkt = f"POINT ({coords[0]} {coords[1]})"
-                sidc = POINT_SIDC
-                # Записуємо (додавай дані у свої поля!)
-                writer.writerow([
-                    sidc, obj.get("id", ""), "", obj.get("name",""), obj.get("datetime",""),
-                    "", "", "", "", "", wkt, color_hex, "", "", ""
-                ])
-            elif obj["type"] == "linestring":
-                # Кольори лінії: автопідбір, якщо треба
-                rgb = rgb_str_to_tuple(obj["color"])
-                nearest_rgb = find_nearest_supported_color(rgb)
-                color_hex = rgb_to_hex(nearest_rgb)
-                sidc = get_line_sidc(color_hex)
-                # Якщо колір не підтримується — жовта лінія з обводкою оригінального кольору
-                if color_hex not in LINES_SIDC_BY_COLOR:
-                    sidc = DEFAULT_LINE_SIDC
-                    outline_hex = color_hex
-                else:
-                    outline_hex = color_hex
-                coords = obj["coords"] # список [(lon,lat),...]
-                wkt = "LINESTRING (" + ", ".join(f"{x} {y}" for x, y in coords) + ")"
-                # Пишемо всі потрібні стилі:
-                writer.writerow([
-                    sidc, obj.get("id", ""), "", obj.get("name",""), obj.get("datetime",""),
-                    "", "", "", "", "", wkt, 
-                    "stroke-opacity: 1",
-                    f"stroke: {outline_hex}",
-                    "stroke-width: 3",
-                    "icon-scale: 0"
-                ])
 
 # Optional for console colors for Base
 try:
@@ -168,6 +130,7 @@ def xml_escape(text_to_escape: Any) -> str:
 
 class Tooltip:
     """Tooltip for Tkinter widgets."""
+
     def __init__(self, widget, text, background="#313335", foreground="#EAEAEA"):
         self.widget = widget
         self.text = text
@@ -197,6 +160,7 @@ class Tooltip:
 
 class Base:
     """Base logging class with verbosity and optional GUI logger."""
+
     def __init__(self, verbosity: int = 0, gui_logger_func=None):
         self.verbosity = verbosity
         self.gui_logger_func = gui_logger_func
@@ -483,7 +447,8 @@ class ApqFile(Base):
             data_dict[key] = val
             if val is not None:
                 all_none = False
-            critical_fields = ['magic', 'offset', 'uid', 'size', 'metaOffset', 'rootOffset', 'nTotal', 'nChild', 'nData']
+            critical_fields = ['magic', 'offset', 'uid', 'size', 'metaOffset', 'rootOffset', 'nTotal', 'nChild',
+                               'nData']
             if val is None and key in critical_fields:
                 self.warning(
                     f"_getvalmulti отримав None для критичного поля '{key}' (тип '{type_name_for_getval}') на зсуві 0x{first_val_offset:X}")
@@ -552,7 +517,8 @@ class ApqFile(Base):
                         if data_len_or_type > self.MAX_REASONABLE_STRING_LEN:
                             self.error(
                                 f"Завелика довжина рядка ({data_len_or_type}) для мета '{name_str}' на 0x{self._tell() - 4:X}.")
-                            if name_str.lower() in ["lat", "lon", "latitude", "longitude", "altitude", "ele", "east", "north", "dte"]:
+                            if name_str.lower() in ["lat", "lon", "latitude", "longitude", "altitude", "ele", "east",
+                                                    "north", "dte"]:
                                 self.error(
                                     f"Поле '{name_str}' (ймовірно числове) не повинно мати такий великий строковий тип/довжину ({data_len_or_type}). Можливо, дані пошкоджено або невірний тип у файлі.")
                             return None
@@ -587,9 +553,11 @@ class ApqFile(Base):
 
     def _get_location(self):
         location_version = 2 if self.version > 100 else 1
-        loc = {'lat': None, 'lon': None, 'alt': None, 'ts': None, 'acc': None, 'bar': None, 'batt': None, 'acc_v': None,
+        loc = {'lat': None, 'lon': None, 'alt': None, 'ts': None, 'acc': None, 'bar': None, 'batt': None,
+               'acc_v': None,
                'cell': {'gen': None, 'prot': None, 'sig': None},
-               'numsv': {'tot': 0, 'unkn': None, 'G': None, 'S': None, 'R': None, 'J': None, 'C': None, 'E': None, 'I': None}}
+               'numsv': {'tot': 0, 'unkn': None, 'G': None, 'S': None, 'R': None, 'J': None, 'C': None, 'E': None,
+                         'I': None}}
         loc_start_offs = self._tell()
         if self.rawoffs + 4 > self.rawsize:
             self.error(f"Недостатньо даних для читання struct_size на 0x{loc_start_offs:X}");
@@ -630,14 +598,22 @@ class ApqFile(Base):
                 self.rawoffs += 1
                 field_type = struct.unpack('>b', field_type_byte_val)[0]
                 bytes_needed = 0
-                if field_type == 0x61: bytes_needed = 4
-                elif field_type == 0x65: bytes_needed = 4
-                elif field_type == 0x70: bytes_needed = 4
-                elif field_type == 0x74: bytes_needed = 8
-                elif field_type == 0x62: bytes_needed = 1
-                elif field_type == 0x6e: bytes_needed = 2
-                elif field_type == 0x73: bytes_needed = 8
-                elif field_type == 0x76: bytes_needed = 4
+                if field_type == 0x61:
+                    bytes_needed = 4
+                elif field_type == 0x65:
+                    bytes_needed = 4
+                elif field_type == 0x70:
+                    bytes_needed = 4
+                elif field_type == 0x74:
+                    bytes_needed = 8
+                elif field_type == 0x62:
+                    bytes_needed = 1
+                elif field_type == 0x6e:
+                    bytes_needed = 2
+                elif field_type == 0x73:
+                    bytes_needed = 8
+                elif field_type == 0x76:
+                    bytes_needed = 4
                 else:
                     self.warning(
                         f"Невідомий тип поля 0x{field_type:02X} у Location v2 на 0x{self._tell() - 1:X}. Пропускаємо решту Location.")
@@ -646,11 +622,16 @@ class ApqFile(Base):
                     self.debug(
                         f"Location v2: Недостатньо даних для поля 0x{field_type:02X}. Очікувалось {bytes_needed}, залишилось {expected_payload_end_pos - self._tell()}.")
                     break
-                if field_type == 0x61: loc['acc'] = self._getval('accuracy2');
-                elif field_type == 0x65: loc['alt'] = self._getval('height');
-                elif field_type == 0x70: loc['bar'] = self._getval('pressure');
-                elif field_type == 0x74: loc['ts'] = self._getval('timestamp');
-                elif field_type == 0x62: loc['batt'] = self._getval('byte');
+                if field_type == 0x61:
+                    loc['acc'] = self._getval('accuracy2');
+                elif field_type == 0x65:
+                    loc['alt'] = self._getval('height');
+                elif field_type == 0x70:
+                    loc['bar'] = self._getval('pressure');
+                elif field_type == 0x74:
+                    loc['ts'] = self._getval('timestamp');
+                elif field_type == 0x62:
+                    loc['batt'] = self._getval('byte');
                 elif field_type == 0x6e:
                     gen_prot = self._getval('byte');
                     loc['cell']['sig'] = self._getval('byte');
@@ -668,12 +649,14 @@ class ApqFile(Base):
                         if isinstance(v_s, (int, float)): total_s += v_s
                         valid_s = True
                     if valid_s: loc['numsv']['tot'] = total_s
-                elif field_type == 0x76: loc['acc_v'] = self._getval('accuracy2');
+                elif field_type == 0x76:
+                    loc['acc_v'] = self._getval('accuracy2');
         if self._tell() != expected_payload_end_pos:
             self.debug(
                 f"Location: зсув після читання (0x{self._tell():X}) не збігається з очікуваним кінцем (0x{expected_payload_end_pos:X}) для struct_size={struct_size}. Коригування.")
             self._seek(expected_payload_end_pos)
-        self.debug('Loc: lon=%.6f, lat=%.6f, alt=%s, ts=%s', loc.get('lon', 0.0), loc.get('lat', 0.0), loc.get('alt', '-'), loc.get('ts', '-'))
+        self.debug('Loc: lon=%.6f, lat=%.6f, alt=%s, ts=%s', loc.get('lon', 0.0), loc.get('lat', 0.0),
+                   loc.get('alt', '-'), loc.get('ts', '-'))
         return loc
 
     def _get_waypoints(self):
@@ -1016,15 +999,15 @@ class Main:
     CSV_CHUNK_SIZE: int = 2000
 
     def __init__(self):
-        self.program_version: str = "8.5.0_smart_color"
+        self.program_version: str = "8.6.0_unified_csv"
         self.empty: str = "Не вибрано"
         self.file_ext: Optional[str] = None
         self.file_name: Optional[str] = None
 
-        self.list_of_formats = [".geojson", ".kml", ".kml", ".kmz", ".kme", ".gpx", ".xlsx", ".csv", ".csv(макет)"]
+        self.list_of_formats = [".geojson", ".kml", ".kmz", ".gpx", ".xlsx", ".csv", ".csv(макет)"]
         self.supported_read_formats = [".kml", ".kmz", ".kme", ".gpx", ".xlsx", ".csv", ".scene", ".wpt", ".set",
                                        ".rte", ".are", ".trk", ".ldk"]
-        self.numerations = ["За найближчими сусідями", "За змійкою", "За відстаню від кута", "За відстаню від границі",
+        self.numerations = ["За найближчими сусідами", "За змійкою", "За відстаню від кута", "За відстаню від границі",
                             "За випадковістю"]
         self.translations = ["Не повертати", "На 90 градусів", "На 180 градусів", "На 270 градусів"]
 
@@ -1099,17 +1082,22 @@ class Main:
         style.configure("TFrame", background=self.C_BACKGROUND)
         style.configure("Side.TFrame", background=self.C_SIDEBAR)
         style.configure("List.TFrame", background=self.C_SIDEBAR)
-        style.configure('Icon.TButton', padding=5, borderwidth=0, relief='flat', background=self.C_BUTTON, foreground=self.C_TEXT, font=self.font)
+        style.configure('Icon.TButton', padding=5, borderwidth=0, relief='flat', background=self.C_BUTTON,
+                        foreground=self.C_TEXT, font=self.font)
         style.map('Icon.TButton', background=[('active', self.C_BUTTON_HOVER)], foreground=[('active', self.C_TEXT)])
-        style.configure('Remove.TButton', background=self.C_SIDEBAR, foreground="#FF6347", font=("Courier New", 10, "bold"), relief='flat', borderwidth=0)
+        style.configure('Remove.TButton', background=self.C_SIDEBAR, foreground="#FF6347",
+                        font=("Courier New", 10, "bold"), relief='flat', borderwidth=0)
         style.map('Remove.TButton', background=[('active', "#4a4a4a")])
         style.configure("Toplevel", background=self.C_BACKGROUND)
-        style.configure("TCheckbutton", background=self.C_BACKGROUND, foreground=self.C_TEXT, font=self.font, indicatorcolor=self.C_TEXT, selectcolor=self.C_BUTTON_HOVER)
+        style.configure("TCheckbutton", background=self.C_BACKGROUND, foreground=self.C_TEXT, font=self.font,
+                        indicatorcolor=self.C_TEXT, selectcolor=self.C_BUTTON_HOVER)
         style.map("TCheckbutton", background=[('active', self.C_BACKGROUND)])
         style.configure("TLabel", background=self.C_BACKGROUND, foreground=self.C_TEXT, font=self.font)
         style.configure("List.TLabel", background=self.C_SIDEBAR, foreground=self.C_TEXT, font=("Courier New", 9))
-        style.configure("Dark.TEntry", fieldbackground="#4F4F4F", foreground=self.C_TEXT, insertcolor=self.C_TEXT, bordercolor=self.C_SIDEBAR, font=("Courier New", 9))
-        style.configure("TMenubutton", background="#4F4F4F", foreground=self.C_TEXT, font=("Courier New", 9), borderwidth=1, relief='raised', arrowcolor=self.C_TEXT)
+        style.configure("Dark.TEntry", fieldbackground="#4F4F4F", foreground=self.C_TEXT, insertcolor=self.C_TEXT,
+                        bordercolor=self.C_SIDEBAR, font=("Courier New", 9))
+        style.configure("TMenubutton", background="#4F4F4F", foreground=self.C_TEXT, font=("Courier New", 9),
+                        borderwidth=1, relief='raised', arrowcolor=self.C_TEXT)
         style.map("TMenubutton", background=[('active', "#646464")])
 
     def run(self):
@@ -1133,20 +1121,24 @@ class Main:
         btn_lightbulb = ttk.Button(left_sidebar, text="i", style='Icon.TButton', command=self.show_info, width=2)
         btn_lightbulb.pack(pady=(5, 5), padx=5, fill='x')
         Tooltip(btn_lightbulb, "Про програму", background=self.C_SIDEBAR, foreground=self.C_TEXT)
-        btn_settings = ttk.Button(left_sidebar, text="S", style='Icon.TButton', command=self.open_numeration_settings, width=2)
+        btn_settings = ttk.Button(left_sidebar, text="S", style='Icon.TButton', command=self.open_numeration_settings,
+                                  width=2)
         btn_settings.pack(pady=5, padx=5, fill='x')
         Tooltip(btn_settings, "Налаштування нумерації", background=self.C_SIDEBAR, foreground=self.C_TEXT)
         center_frame = ttk.Frame(top_container)
         center_frame.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
-        self.status_label = ttk.Label(center_frame, anchor="center", font=("Courier New", 14, "bold"), foreground=self.C_TEXT, relief='flat', padding=(0, 10))
+        self.status_label = ttk.Label(center_frame, anchor="center", font=("Courier New", 14, "bold"),
+                                      foreground=self.C_TEXT, relief='flat', padding=(0, 10))
         self.status_label.pack(fill="both", expand=True)
         self._update_status("ДОДАЙТЕ ФАЙЛИ", self.C_STATUS_DEFAULT)
         right_sidebar = ttk.Frame(top_container, width=50, style="Side.TFrame")
         right_sidebar.grid(row=0, column=2, sticky="ns", padx=(2, 5))
-        self.btn_open_file = ttk.Button(right_sidebar, text="F", style='Icon.TButton', command=self.add_files_to_list, width=2)
+        self.btn_open_file = ttk.Button(right_sidebar, text="F", style='Icon.TButton',
+                                        command=self.add_files_to_list, width=2)
         self.btn_open_file.pack(pady=(5, 5), padx=5, fill='x')
         Tooltip(self.btn_open_file, "Додати файли", background=self.C_SIDEBAR, foreground=self.C_TEXT)
-        self.play_button = ttk.Button(right_sidebar, text="▶", style='Icon.TButton', command=self.start_convertion, state="disabled", width=2)
+        self.play_button = ttk.Button(right_sidebar, text="▶", style='Icon.TButton', command=self.start_convertion,
+                                      state="disabled", width=2)
         self.play_button.pack(pady=5, padx=5, fill='x')
         Tooltip(self.play_button, "Конвертувати все", background=self.C_SIDEBAR, foreground=self.C_TEXT)
         self.list_container = ttk.Frame(self.main_window, style="List.TFrame")
@@ -1175,21 +1167,32 @@ class Main:
             label = ttk.Label(item_frame, text=label_text, style="List.TLabel", anchor='w')
             label.pack(side='left', fill='x', expand=True, padx=(0, 5))
             format_mb = ttk.Menubutton(item_frame, text=file_data['format_var'].get(), style="TMenubutton", width=10)
-            format_menu_tk = tk.Menu(format_mb, tearoff=0, bg=self.C_SIDEBAR, fg=self.C_TEXT, activebackground=self.C_BUTTON_HOVER)
+            format_menu_tk = tk.Menu(format_mb, tearoff=0, bg=self.C_SIDEBAR, fg=self.C_TEXT,
+                                     activebackground=self.C_BUTTON_HOVER)
             for fmt_option in self.list_of_formats:
                 format_menu_tk.add_radiobutton(label=fmt_option, variable=file_data['format_var'], value=fmt_option,
-                                               command=lambda var=file_data['format_var'], button=format_mb, val=fmt_option: self._update_menubutton_text(var, button, val))
+                                               command=lambda var=file_data['format_var'], button=format_mb,
+                                                              val=fmt_option: self._update_menubutton_text(var, button,
+                                                                                                          val))
             format_mb['menu'] = format_menu_tk
             format_mb.pack(side='left', padx=3)
-            color_mb = ttk.Menubutton(item_frame, text=self.colors_en_ua.get(file_data['color_var'].get(), file_data['color_var'].get()), style="TMenubutton", width=12)
-            color_menu_tk = tk.Menu(color_mb, tearoff=0, bg=self.C_SIDEBAR, fg=self.C_TEXT, activebackground=self.C_BUTTON_HOVER)
+            color_mb = ttk.Menubutton(item_frame,
+                                      text=self.colors_en_ua.get(file_data['color_var'].get(),
+                                                                file_data['color_var'].get()), style="TMenubutton",
+                                      width=12)
+            color_menu_tk = tk.Menu(color_mb, tearoff=0, bg=self.C_SIDEBAR, fg=self.C_TEXT,
+                                    activebackground=self.C_BUTTON_HOVER)
             for color_option in self.color_options:
                 disp_name = self.colors_en_ua.get(color_option, color_option)
                 color_menu_tk.add_radiobutton(label=disp_name, variable=file_data['color_var'], value=color_option,
-                                              command=lambda var=file_data['color_var'], button=color_mb, val_en=color_option: self._update_menubutton_text(var, button, val_en))
+                                              command=lambda var=file_data['color_var'], button=color_mb,
+                                                             val_en=color_option: self._update_menubutton_text(var,
+                                                                                                               button,
+                                                                                                               val_en))
             color_mb['menu'] = color_menu_tk
             color_mb.pack(side='left', padx=3)
-            remove_btn = ttk.Button(item_frame, text="X", style='Remove.TButton', width=2, command=lambda fd=file_data: self._remove_file(fd))
+            remove_btn = ttk.Button(item_frame, text="X", style='Remove.TButton', width=2,
+                                    command=lambda fd=file_data: self._remove_file(fd))
             remove_btn.pack(side='left', padx=(3, 0))
         if not self.file_list:
             self._update_status("ДОДАЙТЕ ФАЙЛИ", self.C_STATUS_DEFAULT)
@@ -1200,8 +1203,10 @@ class Main:
                 self.main_window.geometry("450x120")
         else:
             status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛ(ІВ)"
-            if len(self.file_list) == 1: status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛ"
-            elif 2 <= len(self.file_list) <= 4: status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛИ"
+            if len(self.file_list) == 1:
+                status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛ"
+            elif 2 <= len(self.file_list) <= 4:
+                status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛИ"
             self._update_status(status_text, self.C_ACCENT_SUCCESS)
             self.play_button.config(state="normal")
         self.scrollable_frame.update_idletasks()
@@ -1223,7 +1228,10 @@ class Main:
         self._redraw_file_list()
 
     def add_files_to_list(self):
-        file_types = [("Підтримувані файли", " ".join(f"*{ext}" for ext in self.supported_read_formats)), ("AlpineQuest файли", ".wpt .set .rte .are .trk .ldk"), ("KML/KMZ/KME", ".kml .kmz .kme"), ("GPS Exchange", ".gpx"), ("Excel", ".xlsx"), ("CSV", ".csv"), ("SCENE JSON", ".scene"), ("Всі файли", "*.*")]
+        file_types = [("Підтримувані файли", " ".join(f"*{ext}" for ext in self.supported_read_formats)),
+                      ("AlpineQuest файли", ".wpt .set .rte .are .trk .ldk"), ("KML/KMZ/KME", ".kml .kmz .kme"),
+                      ("GPS Exchange", ".gpx"), ("Excel", ".xlsx"), ("CSV", ".csv"), ("SCENE JSON", ".scene"),
+                      ("Всі файли", "*.*")]
         paths = filedialog.askopenfilenames(filetypes=file_types, title="Виберіть файли для конвертації")
         new_files_added = False
         if paths:
@@ -1232,20 +1240,29 @@ class Main:
                     self._update_status(f"Файл вже у списку: {os.path.basename(path)}", warning=True)
                     continue
                 if len(self.file_list) >= self.MAX_FILES:
-                    messagebox.showwarning("Ліміт файлів", f"Максимальна кількість файлів у списку ({self.MAX_FILES}) досягнута.")
+                    messagebox.showwarning("Ліміт файлів",
+                                           f"Максимальна кількість файлів у списку ({self.MAX_FILES}) досягнута.")
                     break
                 base_name = os.path.basename(path)
                 file_ext = os.path.splitext(base_name)[1].lower()
                 if file_ext not in self.supported_read_formats:
-                    messagebox.showwarning("Формат не підтримується", f"Програма не може імпортувати дані з файлів формату '{file_ext}'.")
+                    messagebox.showwarning("Формат не підтримується",
+                                           f"Програма не може імпортувати дані з файлів формату '{file_ext}'.")
                     continue
                 default_export_format = ".kml"
-                if file_ext in [".wpt", ".set", ".rte", ".are", ".trk", ".ldk", ".kmz", ".kme"]: default_export_format = ".kml"
-                elif file_ext == ".gpx": default_export_format = ".gpx"
-                elif file_ext == ".xlsx": default_export_format = ".xlsx"
-                elif file_ext == ".csv": default_export_format = ".csv"
-                elif file_ext == ".scene": default_export_format = ".geojson"
-                file_data = {"full_path": path, "base_name": base_name, "format_var": tk.StringVar(value=default_export_format), "color_var": tk.StringVar(value=self.color_options[0])}
+                if file_ext in [".wpt", ".set", ".rte", ".are", ".trk", ".ldk", ".kmz", ".kme"]:
+                    default_export_format = ".kml"
+                elif file_ext == ".gpx":
+                    default_export_format = ".gpx"
+                elif file_ext == ".xlsx":
+                    default_export_format = ".xlsx"
+                elif file_ext == ".csv":
+                    default_export_format = ".csv"
+                elif file_ext == ".scene":
+                    default_export_format = ".geojson"
+                file_data = {"full_path": path, "base_name": base_name,
+                             "format_var": tk.StringVar(value=default_export_format),
+                             "color_var": tk.StringVar(value=self.color_options[0])}
                 self.file_list.append(file_data)
                 new_files_added = True
             if new_files_added and not self.list_is_visible:
@@ -1361,6 +1378,7 @@ class Main:
                    ".are": self.read_are, ".trk": self.read_trk, ".ldk": self.read_ldk}
         writers = {".kml": self.create_kml, ".kme": self.create_kml, ".kmz": self.create_kmz,
                    ".gpx": self.create_gpx, ".xlsx": self.create_xlsx, ".csv": self.create_csv,
+                   ".csv(макет)": self.create_csv,
                    ".geojson": self.create_geojson, ".scene": self.create_scene}
 
         total_files = len(self.file_list)
@@ -1394,8 +1412,6 @@ class Main:
                     continue
 
                 output_format = file_data['format_var'].get().lower()
-                if output_format == ".csv(макет)":
-                    output_format = ".csv"  # Handle layout alias
 
                 writer_func = writers.get(output_format)
                 if not writer_func:
@@ -1404,7 +1420,7 @@ class Main:
                     continue
 
                 clean_base_name = re.sub(r'\s*\(\d+\)$', '', self.file_name).strip()
-                suggested_name = f"new_{clean_base_name}{output_format}"
+                suggested_name = f"new_{clean_base_name}{output_format.replace('(макет)', '')}"
 
                 if self.output_directory_path == self.empty or not os.path.isdir(self.output_directory_path):
                     self.output_directory_path = os.path.dirname(input_path)
@@ -1412,8 +1428,9 @@ class Main:
                 save_path = filedialog.asksaveasfilename(
                     initialdir=self.output_directory_path,
                     initialfile=suggested_name,
-                    defaultextension=output_format,
-                    filetypes=[(f"{output_format.upper()} Files", f"*{output_format}"), ("All Files", "*.*")],
+                    defaultextension=output_format.replace('(макет)', ''),
+                    filetypes=[(f"{output_format.upper()} Files", f"*{output_format.replace('(макет)', '')}"),
+                               ("All Files", "*.*")],
                     title=f"Зберегти конвертований файл для {current_file_basename}"
                 )
                 if not save_path:
@@ -1461,7 +1478,8 @@ class Main:
 
     def _normalize_apq_data(self, apq_parsed_data, file_path_for_log=""):
         normalized_content = []
-        if not apq_parsed_data or not isinstance(apq_parsed_data, dict) or not apq_parsed_data.get('parse_successful'):
+        if not apq_parsed_data or not isinstance(apq_parsed_data, dict) or not apq_parsed_data.get(
+                'parse_successful'):
             self._update_status(f"APQ парсер не повернув успішних даних для {file_path_for_log}", warning=True)
             return normalized_content
 
@@ -1482,14 +1500,7 @@ class Main:
 
             final_name = effective_meta.get('name', f"{default_name_prefix}_{item_idx + 1}")
             point_type_val = effective_meta.get('sym', effective_meta.get('icon', 'Landmark'))
-            # Оновлено: надійний вибір кольору з пріоритетом
-            point_color_name = self.convert_color(
-                effective_meta.get('color') or
-                item_meta_data.get('color') or
-                (source_file_global_meta_for_item.get('color') if source_file_global_meta_for_item else None) or
-                "White",
-                "name"
-            )
+            point_color_str = effective_meta.get('color', "White")
             description_val = effective_meta.get('comment', effective_meta.get('description', ''))
 
             extra_desc_parts = []
@@ -1504,18 +1515,19 @@ class Main:
 
             full_description = str(description_val) if description_val else ""
             if extra_desc_parts:
-                full_description = (full_description + " | " if full_description else "") + "; ".join(extra_desc_parts)
+                full_description = (full_description + " | " if full_description else "") + "; ".join(
+                    extra_desc_parts)
 
             entry = {
                 "name": final_name, "lat": point_lat, "lon": point_lon,
                 "type": point_type_val,
                 "description": full_description if full_description else None,
                 "geometry_type": "Point",
-                "color": point_color_name,  # <--- ДОДАНО
+                "color": point_color_str,
                 "original_location_data": loc_data,
                 "apq_original_type": apq_source_file_type_for_item,
                 'milgeo:meta:name': final_name,
-                'milgeo:meta:color': point_color_name,
+                'milgeo:meta:color': point_color_str,
                 'milgeo:meta:desc': description_val,
                 'milgeo:meta:creator': effective_meta.get('creator'),
                 'milgeo:meta:creator_url': effective_meta.get('creator_url'),
@@ -1547,9 +1559,7 @@ class Main:
         elif apq_type == 'are':
             locations_list = apq_parsed_data.get('locations', [])
             area_name = global_meta.get('name', 'Area')
-            area_color_name = self.convert_color(
-                global_meta.get('color') or "Blue", "name", True
-            )
+            area_color_str = global_meta.get('color', "Blue")
             area_description = global_meta.get('comment', global_meta.get('description', ''))
             area_points_data_for_polygon = [loc for loc in locations_list if loc and loc.get('lon') is not None]
 
@@ -1558,8 +1568,9 @@ class Main:
                     'name': area_name, 'type': 'Area', 'geometry_type': 'Polygon',
                     'points_data': area_points_data_for_polygon,
                     'apq_original_type': 'are',
-                    'color': area_color_name,  # <--- ДОДАНО
-                    'milgeo:meta:name': area_name, 'milgeo:meta:color': area_color_name,
+                    'color': area_color_str,
+                    'description': area_description,
+                    'milgeo:meta:name': area_name, 'milgeo:meta:color': area_color_str,
                     'milgeo:meta:desc': area_description,
                     'milgeo:meta:creator': global_meta.get('creator'),
                     'milgeo:meta:creator_url': global_meta.get('creator_url'),
@@ -1590,9 +1601,7 @@ class Main:
                 effective_seg_meta.update(seg_meta_data)
 
                 segment_name = effective_seg_meta.get('name', f"{track_default_name}_Segment_{seg_idx + 1}")
-                segment_color_name = self.convert_color(
-                    effective_seg_meta.get('color') or global_meta.get('color') or "Red", "name", True
-                )
+                segment_color_str = effective_seg_meta.get('color', global_meta.get('color', "Red"))
                 segment_description = effective_seg_meta.get('comment', effective_seg_meta.get('description', ''))
                 segment_points_for_line = [loc for loc in seg_locs_data if loc and loc.get('lon') is not None]
 
@@ -1601,8 +1610,9 @@ class Main:
                         'name': segment_name, 'geometry_type': 'LineString',
                         'points_data': segment_points_for_line,
                         'apq_original_type': 'trk',
-                        'color': segment_color_name,  # <--- ДОДАНО
-                        'milgeo:meta:name': segment_name, 'milgeo:meta:color': segment_color_name,
+                        'color': segment_color_str,
+                        'description': segment_description,
+                        'milgeo:meta:name': segment_name, 'milgeo:meta:color': segment_color_str,
                         'milgeo:meta:desc': segment_description,
                         'milgeo:meta:creator': global_meta.get('creator'),
                         'milgeo:meta:creator_url': global_meta.get('creator_url'),
@@ -1711,11 +1721,11 @@ class Main:
 
         except ValueError as e:
             messagebox.showerror("Помилка LDK",
-                                 f"Не вдалося ініціалізувати парсер для LDK {os.path.basename(path)}: {e}")
+                                   f"Не вдалося ініціалізувати парсер для LDK {os.path.basename(path)}: {e}")
             return None
         except Exception as e:
             messagebox.showerror("Помилка читання LDK",
-                                 f"Не вдалося обробити файл {os.path.basename(path)}.\n{type(e).__name__}: {e}")
+                                   f"Не вдалося обробити файл {os.path.basename(path)}.\n{type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -1865,7 +1875,8 @@ class Main:
             result = []
 
             for wpt in root.findall('gpx:wpt', namespaces):
-                name = wpt.find('gpx:name', namespaces).text if wpt.find('gpx:name', namespaces) is not None else 'GPX Waypoint'
+                name = wpt.find('gpx:name',
+                                namespaces).text if wpt.find('gpx:name', namespaces) is not None else 'GPX Waypoint'
                 desc = wpt.find('gpx:desc', namespaces).text if wpt.find('gpx:desc', namespaces) is not None else ''
                 color_name = "White"
                 try:
@@ -1877,7 +1888,8 @@ class Main:
 
                 try:
                     lat, lon = float(wpt.get('lat')), float(wpt.get('lon'))
-                    alt = float(wpt.find('gpx:ele', namespaces).text) if wpt.find('gpx:ele', namespaces) is not None else 0.0
+                    alt = float(wpt.find('gpx:ele', namespaces).text) if wpt.find('gpx:ele',
+                                                                                  namespaces) is not None else 0.0
                     result.append({
                         "name": name, "lat": lat, "lon": lon, "type": "Waypoint",
                         "color": color_name, "description": desc,
@@ -1887,13 +1899,15 @@ class Main:
                     continue
 
             for trk in root.findall('gpx:trk', namespaces):
-                trk_name = trk.find('gpx:name', namespaces).text if trk.find('gpx:name', namespaces) is not None else 'GPX Track'
+                trk_name = trk.find('gpx:name',
+                                    namespaces).text if trk.find('gpx:name', namespaces) is not None else 'GPX Track'
                 for i, trkseg in enumerate(trk.findall('gpx:trkseg', namespaces)):
                     points_data = []
                     for trkpt in trkseg.findall('gpx:trkpt', namespaces):
                         try:
                             lat, lon = float(trkpt.get('lat')), float(trkpt.get('lon'))
-                            alt = float(trkpt.find('gpx:ele', namespaces).text) if trkpt.find('gpx:ele', namespaces) is not None else 0.0
+                            alt = float(trkpt.find('gpx:ele', namespaces).text) if trkpt.find('gpx:ele',
+                                                                                              namespaces) is not None else 0.0
                             points_data.append({'lon': lon, 'lat': lat, 'alt': alt})
                         except (ValueError, TypeError):
                             continue
@@ -1925,20 +1939,25 @@ class Main:
                     name_col = next((i for i, h in enumerate(header) if h in name_aliases), -1)
                     color_col = next((i for i, h in enumerate(header) if h in color_aliases), -1)
                 except StopIteration:
-                    self._update_status(f"XLSX: пропуск аркуша '{sheet.title}' (немає колонок lat/lon)", warning=True)
+                    self._update_status(f"XLSX: пропуск аркуша '{sheet.title}' (немає колонок lat/lon)",
+                                        warning=True)
                     continue
                 for r_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), 2):
                     try:
-                        lat, lon = float(str(row[lat_col]).replace(',', '.')), float(str(row[lon_col]).replace(',', '.'))
+                        lat, lon = float(str(row[lat_col]).replace(',', '.')), float(
+                            str(row[lon_col]).replace(',', '.'))
                         if not (-90 <= lat <= 90 and -180 <= lon <= 180): continue
-                        name = str(row[name_col]) if name_col != -1 and row[name_col] else f'{sheet.title}_Point_{r_idx - 1}'
+                        name = str(
+                            row[name_col]) if name_col != -1 and row[name_col] else f'{sheet.title}_Point_{r_idx - 1}'
                         color_value = str(row[color_col]) if color_col != -1 and row[color_col] else "White"
                         color_name = self.convert_color(color_value, "name")
                         desc_parts = [f"{h.capitalize()}: {v}" for h, v in zip(header, row) if
-                                      v is not None and header.index(h) not in [lat_col, lon_col, name_col, color_col]]
+                                      v is not None and header.index(h) not in [lat_col, lon_col, name_col,
+                                                                                color_col]]
                         desc = "; ".join(desc_parts)
-                        result.append({"name": name, "lat": lat, "lon": lon, "type": "XLSX Point", "color": color_name,
-                                       "description": desc, "geometry_type": "Point"})
+                        result.append(
+                            {"name": name, "lat": lat, "lon": lon, "type": "XLSX Point", "color": color_name,
+                             "description": desc, "geometry_type": "Point"})
                     except (ValueError, TypeError, IndexError):
                         continue
             return result if result else None
@@ -1959,8 +1978,11 @@ class Main:
                 reader = csv.DictReader(infile, dialect=dialect)
                 if not reader.fieldnames: return None
                 h_map = {h.lower().strip(): h for h in reader.fieldnames}
-                lat_key = next((h_map[alias] for alias in ['lat', 'latitude', 'широта', 'y'] if alias in h_map), None)
-                lon_key = next((h_map[alias] for alias in ['lon', 'long', 'longitude', 'довгота', 'x'] if alias in h_map), None)
+                lat_key = next((h_map[alias] for alias in ['lat', 'latitude', 'широта', 'y'] if alias in h_map),
+                               None)
+                lon_key = next(
+                    (h_map[alias] for alias in ['lon', 'long', 'longitude', 'довгота', 'x'] if alias in h_map),
+                    None)
                 name_key = next((h_map[alias] for alias in ['name', 'title', 'назва', 'id'] if alias in h_map), None)
                 desc_key = next((h_map[alias] for alias in ['desc', 'description', 'опис'] if alias in h_map), None)
                 color_key = next((h_map[alias] for alias in ['color', 'колір', 'цвет'] if alias in h_map), None)
@@ -1969,15 +1991,19 @@ class Main:
                     return None
                 for i, row in enumerate(reader, 2):
                     try:
-                        lat, lon = float(str(row[lat_key]).replace(',', '.')), float(str(row[lon_key]).replace(',', '.'))
+                        lat, lon = float(str(row[lat_key]).replace(',', '.')), float(
+                            str(row[lon_key]).replace(',', '.'))
                         if not (-90 <= lat <= 90 and -180 <= lon <= 180): continue
                         name = row.get(name_key, f'CSV_Point_{i - 1}')
                         color_value = row.get(color_key, "White")
                         color_name = self.convert_color(color_value, "name")
-                        other_cols = [k for k in row.keys() if k not in [lat_key, lon_key, name_key, color_key, desc_key]]
-                        desc = row.get(desc_key, "") + "; ".join([f"{k}: {row[k]}" for k in other_cols if row[k]])
-                        result.append({"name": name, "lat": lat, "lon": lon, "type": "CSV Point", "color": color_name,
-                                       "description": desc, "geometry_type": "Point"})
+                        other_cols = [k for k in row.keys() if
+                                      k not in [lat_key, lon_key, name_key, color_key, desc_key]]
+                        desc = row.get(desc_key, "") + "; ".join(
+                            [f"{k}: {row[k]}" for k in other_cols if row[k]])
+                        result.append(
+                            {"name": name, "lat": lat, "lon": lon, "type": "CSV Point", "color": color_name,
+                             "description": desc, "geometry_type": "Point"})
                     except (ValueError, TypeError, KeyError):
                         continue
             return result
@@ -1996,7 +2022,8 @@ class Main:
                     try:
                         result.append({"name": str(item.get("name", "SCENE Point")), "lon": float(pos["lon"]),
                                        "lat": float(pos["lat"]), "type": str(item.get("type", "Landmark")),
-                                       "color": self.convert_color(str(item.get("color", "White")), "name", True),
+                                       "color": self.convert_color(str(item.get("color", "White")), "name",
+                                                                   True),
                                        "description": str(item.get("description", "")), "geometry_type": "Point"})
                     except (ValueError, TypeError):
                         continue
@@ -2010,7 +2037,8 @@ class Main:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            features = data.get("features", []) if data.get("type") == "FeatureCollection" else [data] if data.get("type") == "Feature" else []
+            features = data.get("features", []) if data.get(
+                "type") == "FeatureCollection" else [data] if data.get("type") == "Feature" else []
             for idx, feature in enumerate(features):
                 if not isinstance(feature, dict) or feature.get("type") != "Feature": continue
                 geom, props = feature.get("geometry", {}), feature.get("properties", {})
@@ -2018,18 +2046,22 @@ class Main:
                 name = props.get("name", props.get("title", f"GeoFeature_{idx + 1}"))
                 color = self.convert_color(str(props.get("color", props.get("stroke", "#ffffff"))), "name", True)
                 desc = props.get("description", "")
-                item_base = {"name": str(name), "color": color, "description": str(desc), "source_file": os.path.basename(path)}
+                item_base = {"name": str(name), "color": color, "description": str(desc),
+                             "source_file": os.path.basename(path)}
                 geom_type, coords = geom.get("type"), geom.get("coordinates")
                 if geom_type == "Point" and coords and len(coords) >= 2:
                     try:
-                        item_base.update({"lat": float(coords[1]), "lon": float(coords[0]), "type": "Landmark", "geometry_type": "Point"})
+                        item_base.update(
+                            {"lat": float(coords[1]), "lon": float(coords[0]), "type": "Landmark",
+                             "geometry_type": "Point"})
                         result.append(item_base)
                     except (ValueError, TypeError):
                         pass
                 elif geom_type == "LineString" and coords and len(coords) >= 2:
                     points_data = [{'lon': c[0], 'lat': c[1]} for c in coords if len(c) >= 2]
                     if len(points_data) >= 2:
-                        item_base.update({"type": "LineString", "geometry_type": "LineString", "points_data": points_data})
+                        item_base.update(
+                            {"type": "LineString", "geometry_type": "LineString", "points_data": points_data})
                         result.append(item_base)
                 elif geom_type == "Polygon" and coords and len(coords[0]) >= 3:
                     points_data = [{'lon': c[0], 'lat': c[1]} for c in coords[0] if len(c) >= 2]
@@ -2046,14 +2078,18 @@ class Main:
         items_data = []
         for item in contents_list:
             if item.get('geometry_type') == 'Point':
-                items_data.append({"color": str(item.get("color", "White")), "creationDate": int(time.time() * 1000),
-                                   "name": str(item.get("name", "N/A")),
-                                   "position": {"alt": 0.0, "lat": float(item.get("lat", 0.0)), "lon": float(item.get("lon", 0.0))},
-                                   "type": str(item.get("type", "Landmark"))})
-        scene_obj = {"scene": {"items": items_data, "name": os.path.splitext(os.path.basename(save_path))[0]}, "version": 7}
+                items_data.append(
+                    {"color": str(item.get("color", "White")), "creationDate": int(time.time() * 1000),
+                     "name": str(item.get("name", "N/A")),
+                     "position": {"alt": 0.0, "lat": float(item.get("lat", 0.0)),
+                                  "lon": float(item.get("lon", 0.0))},
+                     "type": str(item.get("type", "Landmark"))})
+        scene_obj = {
+            "scene": {"items": items_data, "name": os.path.splitext(os.path.basename(save_path))[0]}, "version": 7}
         try:
             with open(save_path, "w", encoding="UTF-8") as f:
-                json.dump(scene_obj, f, ensure_ascii=False, separators=(',', ':')); return True
+                json.dump(scene_obj, f, ensure_ascii=False, separators=(',', ':'));
+                return True
         except IOError:
             return False
 
@@ -2061,7 +2097,8 @@ class Main:
         if not contents_list: return False
         try:
             with open(save_path, "w", encoding="UTF-8") as f:
-                f.write(self._create_kml_string(contents_list, os.path.splitext(os.path.basename(save_path))[0])); return True
+                f.write(self._create_kml_string(contents_list, os.path.splitext(os.path.basename(save_path))[0]));
+                return True
         except IOError:
             return False
 
@@ -2081,16 +2118,18 @@ class Main:
                 icon_style = ET.SubElement(style, "IconStyle")
                 ET.SubElement(icon_style, "color").text = kml_color
                 icon = ET.SubElement(icon_style, "Icon")
-                ET.SubElement(icon, "href").text = "http://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png" # Standard icon
+                ET.SubElement(icon, "href").text = "http://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png"  # Standard icon
                 line_style = ET.SubElement(style, "LineStyle")
                 ET.SubElement(line_style, "color").text = kml_color
                 ET.SubElement(line_style, "width").text = "2"
                 poly_style = ET.SubElement(style, "PolyStyle")
-                ET.SubElement(poly_style, "color").text = f"7f{color_hex[4:6]}{color_hex[2:4]}{color_hex[0:2]}"
+                ET.SubElement(poly_style,
+                              "color").text = f"7f{color_hex[4:6]}{color_hex[2:4]}{color_hex[0:2]}"
         for item in contents_list:
             placemark = ET.SubElement(document, "Placemark")
             ET.SubElement(placemark, "name").text = xml_escape(item.get("name", "N/A"))
-            if item.get("description"): ET.SubElement(placemark, "description").text = xml_escape(item.get("description"))
+            if item.get("description"): ET.SubElement(placemark, "description").text = xml_escape(
+                item.get("description"))
             ET.SubElement(placemark, "styleUrl").text = f"#{style_map.get(item.get('color', 'White'), 'style_White')}"
             geom_type = item.get("geometry_type")
             if geom_type == "Point":
@@ -2103,7 +2142,7 @@ class Main:
                     coords_str += f" {coords_data[0]['lon']},{coords_data[0]['lat']},0"
                 if geom_type == "LineString":
                     geom = ET.SubElement(placemark, "LineString")
-                else: # Polygon
+                else:  # Polygon
                     geom = ET.SubElement(placemark, "Polygon")
                     outer = ET.SubElement(geom, "outerBoundaryIs")
                     geom = ET.SubElement(outer, "LinearRing")
@@ -2111,48 +2150,13 @@ class Main:
         ET.indent(kml_doc, space="  ")
         return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(kml_doc, encoding='unicode')
 
-    def convert_color(self, color_value, target_format, allow_name_lookup_from_hex=False):
-        if not isinstance(color_value, str) or not color_value:
-            color_value = "White"
-        value_lower = color_value.lower().strip()
-        color_hex = ""
-        color_name_en = ""
-        for en_name, hex_val in self.colors.items():
-            if en_name.lower() == value_lower:
-                color_name_en = en_name
-                color_hex = hex_val.lower()
-                break
-        if not color_name_en:
-            for en_name, ua_name in self.colors_en_ua.items():
-                if ua_name.lower() == value_lower:
-                    color_name_en = en_name
-                    color_hex = self.colors[en_name].lower()
-                    break
-        if not color_hex and value_lower.startswith("#") and len(value_lower) in [4, 7]:
-            hex_in = value_lower
-            if len(hex_in) == 4:
-                hex_in = f"#{hex_in[1]}{hex_in[1]}{hex_in[2]}{hex_in[2]}{hex_in[3]}{hex_in[3]}"
-            color_hex = hex_in
-            if allow_name_lookup_from_hex:
-                color_name_en = next((name for name, hx in self.colors.items() if hx.lower() == color_hex), "White")
-        if not color_hex:
-            color_name_en = "White"
-            color_hex = self.colors["White"].lower()
-        if target_format == 'hex':
-            return color_hex
-        elif target_format == 'name':
-            return color_name_en
-        elif target_format == 'str_rgb':
-            h = color_hex.lstrip('#')
-            return f"{int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)}"
-        return color_hex
-
     def create_kmz(self, contents_list, save_path):
         if not contents_list: return False
         kml_content = self._create_kml_string(contents_list, os.path.splitext(os.path.basename(save_path))[0])
         try:
             with zipfile.ZipFile(save_path, 'w', zipfile.ZIP_DEFLATED) as kmz:
-                kmz.writestr('doc.kml', kml_content); return True
+                kmz.writestr('doc.kml', kml_content);
+                return True
         except Exception:
             return False
 
@@ -2167,11 +2171,13 @@ class Main:
                 trk = ET.SubElement(gpx, 'trk')
                 ET.SubElement(trk, 'name').text = item.get("name")
                 trkseg = ET.SubElement(trk, 'trkseg')
-                for p in item.get('points_data', []): ET.SubElement(trkseg, 'trkpt', lat=str(p['lat']), lon=str(p['lon']))
+                for p in item.get('points_data', []): ET.SubElement(trkseg, 'trkpt', lat=str(p['lat']),
+                                                                    lon=str(p['lon']))
         tree = ET.ElementTree(gpx)
         ET.indent(tree, space="  ")
         try:
-            tree.write(save_path, encoding='utf-8', xml_declaration=True); return True
+            tree.write(save_path, encoding='utf-8', xml_declaration=True);
+            return True
         except IOError:
             return False
 
@@ -2180,9 +2186,12 @@ class Main:
         try:
             workbook = xlsxwriter.Workbook(save_path)
         except xlsxwriter.exceptions.FileCreateError:
-            self._update_status(f"Помилка XLSX (файл зайнятий?)", error=True); return False
+            self._update_status(f"Помилка XLSX (файл зайнятий?)", error=True);
+            return False
         headers = ["NAME", "LAT", "LON", "TYPE", "COLOR", "DESC", "GEOMETRY_TYPE", "WKT"]
-        header_format = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1, 'align': 'center'})
+        header_format = workbook.add_format(
+            {'bold': True, 'bg_color': '#D9EAD3', 'border': 1, 'align': 'center'})
+
         def write_sheet(ws, data):
             ws.write_row(0, 0, headers, header_format)
             for r, item in enumerate(data, 1):
@@ -2199,9 +2208,11 @@ class Main:
                         wkt = f"POLYGON (({pts}))"
                     else:
                         wkt = f"LINESTRING ({pts})"
-                row_data = [item.get(k, '') for k in ['name', 'lat', 'lon', 'type', 'color', 'description']] + [geom_type, wkt]
+                row_data = [item.get(k, '') for k in
+                            ['name', 'lat', 'lon', 'type', 'color', 'description']] + [geom_type, wkt]
                 ws.write_row(r, 0, row_data)
             ws.autofit()
+
         if split_by_colors:
             data_by_color = {}
             for item in contents_list: data_by_color.setdefault(item.get('color', 'NoColor'), []).append(item)
@@ -2209,23 +2220,11 @@ class Main:
         else:
             write_sheet(workbook.add_worksheet("Data"), contents_list)
         try:
-            workbook.close(); return True
+            workbook.close();
+            return True
         except xlsxwriter.exceptions.FileCreateError:
             return False
             
-    def create_csv(self, contents_list: List[Dict[str, Any]], save_path: str) -> bool:
-        """
-        Dispatcher for CSV creation.
-        """
-        if not contents_list:
-            self._update_status(f"Немає даних для запису в CSV.", warning=True)
-            return False
-        has_lines_or_polygons = any(item.get('geometry_type') in ['LineString', 'Polygon'] for item in contents_list)
-        if has_lines_or_polygons:
-            return self.create_csv_for_lines_and_polygons(contents_list, save_path)
-        else:
-            return self.create_csv_for_points_simple(contents_list, save_path)
-
     # --- COLOR METHODS ---
     @staticmethod
     def _color_distance(rgb1: Tuple[int, int, int], rgb2: Tuple[int, int, int]) -> float:
@@ -2246,13 +2245,11 @@ class Main:
                 closest_name = name
         return closest_name
 
-    def convert_color(self, color_value: Any, target_format: str = 'name') -> str:
-        """
-        Robustly converts color representation (name, hex, rgb-tuple)
-        to standardized palette color (name or hex).
-        """
+    def convert_color(self, color_value: Any, target_format: str = 'name', allow_name_lookup_from_hex=False) -> str:
         if not color_value:
             return "White" if target_format == 'name' else self.colors["White"]
+
+        # Directly handle if it's already a valid color name
         if isinstance(color_value, str) and color_value.capitalize() in self.colors:
             color_name_en = color_value.capitalize()
         else:
@@ -2271,7 +2268,8 @@ class Main:
                 else:
                     rgba_match = re.search(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', value_lower)
                     if rgba_match:
-                        rgb_tuple = (int(rgba_match.group(1)), int(rgba_match.group(2)), int(rgba_match.group(3)))
+                        rgb_tuple = (
+                        int(rgba_match.group(1)), int(rgba_match.group(2)), int(rgba_match.group(3)))
                     else:
                         for keyword, en_name in self.color_keyword_map.items():
                             if keyword in value_lower:
@@ -2279,8 +2277,11 @@ class Main:
                                 break
             if rgb_tuple:
                 color_name_en = self._find_closest_color_name(rgb_tuple)
+            
             if not color_name_en:
-                color_name_en = "White"
+                 color_name_en = "White"
+
+        # Return requested format
         if target_format == 'name':
             return color_name_en
         elif target_format == 'hex':
@@ -2290,141 +2291,92 @@ class Main:
             return f"{int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)}"
         return color_name_en
 
-    def get_best_color_for_item(self, item):
+    # --- NEW UNIFIED CSV LOGIC ---
+    def create_csv(self, contents_list: List[Dict[str, Any]], base_save_path: str) -> bool:
         """
-        Знаходить найкращий колір для об'єкта, аналізуючи різні поля
-        на наявність будь-якого відомого формату кольору (назва, hex, rgb...).
-        """
-        explicit_color = item.get('milgeo:meta:color') or item.get('color')
-        if explicit_color:
-            if isinstance(explicit_color, list):
-                explicit_color = explicit_color[0] if explicit_color else None
-            if explicit_color:
-                return self.convert_color(explicit_color, 'name')
-
-        for field in ['name', 'description', 'sym', 'icon']:
-            text_content = item.get(field)
-            if text_content and isinstance(text_content, str):
-                text_lower = text_content.lower()
-                hex_match = re.search(r'#([0-9a-f]{6}|[0-9a-f]{3})\b', text_lower)
-                if hex_match: return self.convert_color(hex_match.group(0), 'name')
-                
-                rgba_match = re.search(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', text_lower)
-                if rgba_match:
-                    rgb = (int(rgba_match.group(1)), int(rgba_match.group(2)), int(rgba_match.group(3)))
-                    return self.convert_color(rgb, 'name')
-                
-                for keyword, en_name in self.color_keyword_map.items():
-                    if keyword in text_lower:
-                        return en_name
-        return "White"
-
-    # --- CSV WRITER METHODS ---
-    def create_csv(self, contents_list, save_path):
-        """
-        Оновлений диспетчер CSV. Аналізує вміст і викликає відповідний метод для запису.
+        Створює єдиний CSV файл для всіх типів геометрії (точки, лінії, полігони),
+        зберігаючи SIDC та інформацію про стиль.
         """
         if not contents_list:
-            self._update_status(f"Немає даних для запису в CSV.", warning=True)
+            self._update_status("Немає даних для запису в CSV.", warning=True)
             return False
-        has_lines_or_polygons = any(item.get('geometry_type') in ['LineString', 'Polygon'] for item in contents_list)
-        if has_lines_or_polygons:
-            return self.create_csv_for_lines_and_polygons(contents_list, save_path)
-        else:
-            return self.create_csv_for_points_simple(contents_list, save_path)
-    
-    def create_csv_for_points_simple(self, contents_list, base_save_path):
-        """Створює CSV для точок у спеціалізованому форматі (схожому на 2.csv)."""
-        self._update_status(f"Створення CSV (спеціалізований) для точок: {os.path.basename(base_save_path)}...", self.C_BUTTON_HOVER)
-        headers = ["sidc", "id", "quantity", "name", "observation_datetime", "reliability_credibility", "staff_comments", "platform_type", "direction", "speed", "coordinates"]
-        DEFAULT_SIDC = "10031000001211000000"
-        if not contents_list:
-            self._update_status(f"Немає даних для CSV: {os.path.basename(base_save_path)}", warning=True)
-            return False
+
+        self._update_status(f"Створення універсального CSV: {os.path.basename(base_save_path)}...",
+                            self.C_BUTTON_HOVER)
+        
+        headers = ["sidc", "id", "quantity", "name", "observation_datetime", "reliability_credibility",
+                   "staff_comments", "platform_type", "direction", "speed", "coordinates", "comment 1", "comment 2",
+                   "comment 3", "comment 4"]
+
         try:
-            point_items = [item for item in contents_list if item.get('geometry_type') == 'Point']
-            if self.names_agree.get():
-                 numerated_points = self._apply_selected_numeration(point_items)
-            else:
-                 numerated_points = point_items
-
-            for chunk_index, i in enumerate(range(0, len(numerated_points), self.CSV_CHUNK_SIZE)):
-                chunk_contents = numerated_points[i:i + self.CSV_CHUNK_SIZE]
+            for chunk_index, i in enumerate(range(0, len(contents_list), self.CSV_CHUNK_SIZE)):
+                chunk_contents = contents_list[i:i + self.CSV_CHUNK_SIZE]
                 current_save_path = self._get_chunked_save_path(base_save_path, chunk_index)
+
                 with open(current_save_path, "w", encoding="UTF-8", newline='') as f_out:
                     writer = csv.writer(f_out, quoting=csv.QUOTE_ALL)
                     writer.writerow(headers)
+
                     for item in chunk_contents:
+                        geom_type = item.get("geometry_type")
                         name = item.get('name', '')
-                        sidc = item.get('milgeo:meta:sidc') or DEFAULT_SIDC
-                        reliability_parts = []
-                        comments_parts = []
-                        color_name = self.get_best_color_for_item(item)
-                        if color_name and color_name != "White":
-                            reliability_parts.append(f"Колір: {self.colors_en_ua.get(color_name, color_name)}")
-                        creator = item.get('milgeo:meta:creator')
-                        if creator: reliability_parts.append(f"Автор: {creator}")
-                        description = item.get('milgeo:meta:desc') or item.get('description')
-                        if description: comments_parts.append(f"{description}")
-                        staff_comments = "; ".join(comments_parts)
-                        reliability_credibility = "; ".join(reliability_parts)
                         ts = item.get('original_location_data', {}).get('ts')
                         observation_datetime = ""
                         if ts:
-                            try: observation_datetime = datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-                            except (ValueError, TypeError): pass
-                        wkt_string = f"POINT ({item.get('lon', 0.0)} {item.get('lat', 0.0)})"
-                        row = [sidc, "", "1", name, observation_datetime, reliability_credibility, staff_comments, "", "", "", wkt_string]
-                        writer.writerow(row)
-            self._update_status(f"Файли CSV (точки) успішно збережено.", self.C_ACCENT_DONE)
-            return True
-        except Exception as e:
-            self._update_status(f"Помилка під час створення CSV для точок: {e}", error=True)
-            import traceback
-            traceback.print_exc()
-            return False
-            
-    def create_csv_for_lines_and_polygons(self, contents_list, base_save_path):
-        """Створює CSV для ліній та полігонів у форматі з SIDC-кольором."""
-        self._update_status(f"Створення CSV для ліній/полігонів: {os.path.basename(base_save_path)}...", self.C_BUTTON_HOVER)
-        headers = ["sidc", "id", "quantity", "name", "observation_datetime", "reliability_credibility", "staff_comments", "platform_type", "direction", "speed", "coordinates"]
-        SIDC_MAP_BY_COLOR = {
-            "Red": "10062500001101010000", "Yellow": "10012500001101020000",
-            "Blue": "10032500001101020000", "Green": "10042500001101010000",
-        }
-        DEFAULT_SIDC = "10012500001101020000"
-        if not contents_list: return False
-        items_to_process = [item for item in contents_list if item.get('geometry_type') in ['LineString', 'Polygon']]
-        if not items_to_process:
-            self._update_status(f"У файлі немає ліній або полігонів для експорту в CSV.", warning=True)
-            return True
-        try:
-            for chunk_index, i in enumerate(range(0, len(items_to_process), self.CSV_CHUNK_SIZE)):
-                chunk_contents = items_to_process[i:i + self.CSV_CHUNK_SIZE]
-                current_save_path = self._get_chunked_save_path(base_save_path, chunk_index)
-                with open(current_save_path, "w", encoding="UTF-8", newline='') as f_out:
-                    writer = csv.writer(f_out, quoting=csv.QUOTE_ALL)
-                    writer.writerow(headers)
-                    for item in chunk_contents:
-                        color_name_en = self.get_best_color_for_item(item)
-                        sidc = SIDC_MAP_BY_COLOR.get(color_name_en, DEFAULT_SIDC)
-                        color_name_ua = self.colors_en_ua.get(color_name_en, "Жовтий").upper()
-                        points_data = item.get('points_data', [])
-                        wkt_string = ""
-                        if points_data:
+                            try:
+                                observation_datetime = datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+                            except (ValueError, TypeError):
+                                pass
+
+                        row = [""] * len(headers)
+                        row[3] = name
+                        row[4] = observation_datetime
+                        
+                        # --- Point Logic ---
+                        if geom_type == 'Point':
+                            wkt = f"POINT ({item.get('lon', 0.0)} {item.get('lat', 0.0)})"
+                            color_str = self.convert_color(item.get("color"), 'hex')
+
+                            row[0] = item.get('milgeo:meta:sidc') or POINT_SIDC
+                            row[10] = wkt
+                            row[11] = color_str # comment 1 for color
+                        
+                        # --- LineString & Polygon Logic ---
+                        elif geom_type in ['LineString', 'Polygon']:
+                            points_data = item.get('points_data', [])
+                            if not points_data: continue
+
                             coords_parts = [f"{p.get('lon', 0.0)} {p.get('lat', 0.0)}" for p in points_data]
-                            if item.get('geometry_type') == 'LineString':
-                                wkt_string = f"LINESTRING ({', '.join(coords_parts)})"
-                            elif item.get('geometry_type') == 'Polygon':
+                            
+                            if geom_type == 'Polygon':
                                 if coords_parts and coords_parts[0] != coords_parts[-1]:
                                     coords_parts.append(coords_parts[0])
-                                wkt_string = f"POLYGON (({', '.join(coords_parts)}))"
-                        row = [sidc, "", "", color_name_ua, "", "", "", "", "", "", wkt_string]
+                                wkt = f"POLYGON (({', '.join(coords_parts)}))"
+                            else: # LineString
+                                wkt = f"LINESTRING ({', '.join(coords_parts)})"
+
+                            # Determine color and SIDC
+                            color_hex = self.convert_color(item.get('color'), 'hex')
+                            sidc = get_line_sidc(color_hex)
+                            
+                            row[0] = item.get('milgeo:meta:sidc') or sidc
+                            row[10] = wkt
+                            
+                            # Add styling to comments
+                            row[11] = "stroke-opacity: 1"
+                            row[12] = f"stroke: {color_hex}"
+                            row[13] = "stroke-width: 3"
+                            row[14] = "icon-scale: 0"
+                        
+                        else:
+                            continue # Skip unknown geometry types
+                        
                         writer.writerow(row)
-            self._update_status(f"Файли CSV для ліній/полігонів успішно збережено.", self.C_ACCENT_DONE)
+
+            self._update_status(f"Файл CSV успішно збережено: {os.path.basename(base_save_path)}", self.C_ACCENT_DONE)
             return True
         except Exception as e:
-            self._update_status(f"Помилка під час створення CSV для ліній: {e}", error=True)
+            self._update_status(f"Помилка під час створення CSV: {e}", error=True)
             import traceback
             traceback.print_exc()
             return False
@@ -2443,7 +2395,8 @@ class Main:
             geometry = None
             if geom_type == 'Point':
                 geometry = {"type": "Point", "coordinates": [item.get("lon", 0.0), item.get("lat", 0.0),
-                                                             item.get("original_location_data", {}).get("alt", 0.0) or 0.0]}
+                                                             item.get("original_location_data", {}).get("alt",
+                                                                                                        0.0) or 0.0]}
             elif geom_type in ['LineString', 'Polygon']:
                 coords = [[p.get('lon', 0.0), p.get('lat', 0.0)] for p in item.get('points_data', [])]
                 if len(coords) >= (2 if geom_type == 'LineString' else 3):
@@ -2453,13 +2406,17 @@ class Main:
         if not features: return False
         try:
             with open(save_path, "w", encoding="UTF-8") as f:
-                json.dump({"type": "FeatureCollection", "features": features}, f, indent=2, ensure_ascii=False); return True
+                json.dump({"type": "FeatureCollection", "features": features}, f, indent=2,
+                          ensure_ascii=False);
+                return True
         except IOError:
             return False
 
     def _apply_selected_numeration(self, point_list):
         if not point_list: return []
-        if len(point_list) == 1: point_list[0]["name"] = self.generate_free_numbers_list(1)[0]; return point_list
+        if len(point_list) == 1:
+            point_list[0]["name"] = self.generate_free_numbers_list(1)[0];
+            return point_list
         method = self.numerations.index(self.chosen_numeration.get())
         if method == 0: return self.apply_neighbor_numeration(point_list)
         if method == 1: return self.apply_snake_numeration(point_list)
@@ -2519,7 +2476,9 @@ class Main:
         unvisited.remove(start_point)
         current_point = start_point
         while unvisited:
-            next_point = min(unvisited, key=lambda p: self.calculate_distance((current_point['lat'], current_point['lon']), (p['lat'], p['lon'])))
+            next_point = min(unvisited,
+                             key=lambda p: self.calculate_distance((current_point['lat'], current_point['lon']),
+                                                                   (p['lat'], p['lon'])))
             ordered_points.append(next_point)
             unvisited.remove(next_point)
             current_point = next_point
