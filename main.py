@@ -25,6 +25,125 @@ import ctypes
 import uuid
 from typing import Any, List, Dict, Optional, Tuple
 
+# Список підтримуваних кольорів для експорту (RGB)
+# Формат: (R, G, B): "назва" (якщо треба), SIDC
+SUPPORTED_COLORS = {
+    (77, 192, 77):      ("ЗЕЛЕНИЙ",   None),  # SIDC для ліній задаєш окремо
+    (0, 0, 0):          ("ЧОРНИЙ",    None),
+    (229, 57, 114):     ("МАЛИНОВИЙ", None),
+    (255, 255, 255):    ("БІЛИЙ",     None),
+    (54, 69, 77):       ("СІРИЙ",     None),
+    (117, 79, 229):     ("ФІОЛЕТОВИЙ",None),
+    (255, 85, 51):      ("ЧЕРВОНИЙ",  None),
+    (184, 82, 204):     ("ФІОЛЕТОВИЙ2",None),
+    (55, 82, 217):      ("СИНІЙ",     None),
+    (89, 115, 128):     ("СІРИЙ2",    None),
+    (179, 179, 179):    ("СВІТЛОСІРИЙ",None),
+    (37, 164, 254):     ("БЛАКИТНИЙ", None),
+    (255, 147, 39):     ("ОРАНЖЕВИЙ", None),
+    (176, 228, 103):    ("САЛАТОВИЙ", None),
+    (128, 99, 89):      ("КОРИЧНЕВИЙ",None),
+    (59, 213, 231):     ("БІРЮЗОВИЙ", None),
+    (35, 140, 131):     ("БІРЮЗОВИЙ2",None),
+    (255, 215, 13):     ("ЖОВТИЙ",    None),
+    (242, 61, 61):      ("ЧЕРВОНИЙ2", None),
+    (244, 255, 129):    ("ЛИМОННИЙ",  None),
+}
+
+# SIDC для точок/орієнтирів
+POINT_SIDC = "10016600006099000000"
+
+# SIDC для ліній (приклад: заміни на свої!)
+LINES_SIDC_BY_COLOR = {
+    # HEX: SIDC
+    "#ff5533": "10062500001101010000", # ЧЕРВОНИЙ
+    "#ffd70d": "10012500001101020000", # ЖОВТИЙ
+    "#3752d9": "10032500001101020000", # СИНІЙ
+    "#4dc04d": "10042500001101010000", # ЗЕЛЕНИЙ
+    "#000000": "10066600001100000000", # ЧОРНИЙ (унікальний випадок)
+    # ... Додавай свої відповідності HEX→SIDC для ліній!
+}
+
+# HEX для жовтого (за замовчуванням для "невідомих" маршрутів)
+DEFAULT_LINE_COLOR = (255, 215, 13)
+DEFAULT_LINE_HEX = "#ffd70d"
+DEFAULT_LINE_SIDC = LINES_SIDC_BY_COLOR[DEFAULT_LINE_HEX]
+
+def rgb_str_to_tuple(s):
+    """Перетворює 'R,G,B[,A]' у (R,G,B)"""
+    parts = list(map(int, s.split(",")[:3]))
+    return tuple(parts)
+
+def rgb_to_hex(rgb):
+    return '#{:02x}{:02x}{:02x}'.format(*rgb)
+
+def hex_to_rgb(hexstr):
+    hexstr = hexstr.lstrip('#')
+    return tuple(int(hexstr[i:i+2], 16) for i in (0, 2, 4))
+
+def color_distance(c1, c2):
+    """Євклідова відстань для пошуку найближчого кольору"""
+    return sqrt(sum((a-b)**2 for a, b in zip(c1, c2)))
+
+def find_nearest_supported_color(rgb):
+    """Знаходить найближчий підтримуваний колір"""
+    nearest = min(SUPPORTED_COLORS.keys(), key=lambda c: color_distance(rgb, c))
+    return nearest
+
+def get_line_sidc(hex_color):
+    """SIDC для лінії за HEX"""
+    hex_color = hex_color.lower()
+    return LINES_SIDC_BY_COLOR.get(hex_color, DEFAULT_LINE_SIDC)
+
+def export_to_csv(objects, outfile="export.csv"):
+    """objects: список словників з полями type, coords, color, name тощо"""
+    with open(outfile, "w", newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        # Заголовки підлаштуй під твій формат!
+        writer.writerow([
+            "sidc", "id", "quantity", "name", "observation_datetime",
+            "reliability_credibility", "staff_comments", "platform_type",
+            "direction", "speed", "coordinates", "comment 1", "comment 2", "comment 3", "comment 4"
+        ])
+        for obj in objects:
+            if obj["type"] == "point":
+                # Кольори точок: автопідбір, якщо треба
+                rgb = rgb_str_to_tuple(obj["color"])
+                nearest_rgb = find_nearest_supported_color(rgb)
+                color_hex = rgb_to_hex(nearest_rgb)
+                # Створення WKT
+                coords = obj["coords"]
+                wkt = f"POINT ({coords[0]} {coords[1]})"
+                sidc = POINT_SIDC
+                # Записуємо (додавай дані у свої поля!)
+                writer.writerow([
+                    sidc, obj.get("id", ""), "", obj.get("name",""), obj.get("datetime",""),
+                    "", "", "", "", "", wkt, color_hex, "", "", ""
+                ])
+            elif obj["type"] == "linestring":
+                # Кольори лінії: автопідбір, якщо треба
+                rgb = rgb_str_to_tuple(obj["color"])
+                nearest_rgb = find_nearest_supported_color(rgb)
+                color_hex = rgb_to_hex(nearest_rgb)
+                sidc = get_line_sidc(color_hex)
+                # Якщо колір не підтримується — жовта лінія з обводкою оригінального кольору
+                if color_hex not in LINES_SIDC_BY_COLOR:
+                    sidc = DEFAULT_LINE_SIDC
+                    outline_hex = color_hex
+                else:
+                    outline_hex = color_hex
+                coords = obj["coords"] # список [(lon,lat),...]
+                wkt = "LINESTRING (" + ", ".join(f"{x} {y}" for x, y in coords) + ")"
+                # Пишемо всі потрібні стилі:
+                writer.writerow([
+                    sidc, obj.get("id", ""), "", obj.get("name",""), obj.get("datetime",""),
+                    "", "", "", "", "", wkt, 
+                    "stroke-opacity: 1",
+                    f"stroke: {outline_hex}",
+                    "stroke-width: 3",
+                    "icon-scale: 0"
+                ])
+
 # Optional for console colors for Base
 try:
     import colorama  # type: ignore
