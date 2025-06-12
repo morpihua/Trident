@@ -1066,7 +1066,7 @@ class Main:
             icon_path = os.path.join(base_path, 'nexus.ico')
             if os.path.exists(icon_path): self.main_window.iconbitmap(icon_path)
         except Exception as e:
-            print(f"Попередження: не вдалося завантажити іконку: {e}")
+            print(f"Попередження: не вдалося завантажити іконку: {e}")create_csv
         self.main_window.protocol("WM_DELETE_WINDOW", self.exit)
         self.main_window.resizable(True, True)
 
@@ -1075,6 +1075,17 @@ class Main:
 
         self.input_file_path: Optional[str] = None
         self.output_directory_path: str = self.empty
+        
+    def color_to_csv_rgba(self, color_value: Any) -> str:
+        """Повертає рядок формату R,G,B,1 для кольору"""
+        # Використовуємо існуючу функцію convert_color для отримання hex
+        color_hex = self.convert_color(color_value, 'hex')
+        h = color_hex.lstrip('#')
+        # Якщо hex має 8 символів (ARGB), беремо останні 6
+        if len(h) == 8:
+            h = h[2:]
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"{r},{g},{b},1"
 
     def _configure_styles(self):
         style = ttk.Style(self.main_window)
@@ -2335,12 +2346,10 @@ class Main:
                         # --- Point Logic ---
                         if geom_type == 'Point':
                             wkt = f"POINT ({item.get('lon', 0.0)} {item.get('lat', 0.0)})"
-                            color_str = self.convert_color(item.get("color"), 'hex')
-
+                            color_csv = self.color_to_csv_rgba(item.get("color"))
                             row[0] = item.get('milgeo:meta:sidc') or POINT_SIDC
                             row[10] = wkt
-                            row[11] = color_str # comment 1 for color
-                        
+                            row[11] = color_csv # <-- ТЕПЕР CSV-ФОРМАТ
                         # --- LineString & Polygon Logic ---
                         elif geom_type in ['LineString', 'Polygon']:
                             points_data = item.get('points_data', [])
@@ -2356,7 +2365,7 @@ class Main:
                                 wkt = f"LINESTRING ({', '.join(coords_parts)})"
 
                             # Determine color and SIDC
-                            color_hex = self.convert_color(item.get('color'), 'hex')
+                            color_csv = self.color_to_csv_rgba(item.get('color'))
                             sidc = get_line_sidc(color_hex)
                             
                             row[0] = item.get('milgeo:meta:sidc') or sidc
@@ -2364,7 +2373,7 @@ class Main:
                             
                             # Add styling to comments
                             row[11] = "stroke-opacity: 1"
-                            row[12] = f"stroke: {color_hex}"
+                            row[12] = f"stroke: {color_csv}"
                             row[13] = "stroke-width: 3"
                             row[14] = "icon-scale: 0"
                         
