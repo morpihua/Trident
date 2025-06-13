@@ -56,16 +56,16 @@ POINT_SIDC = "10016600006099000000"
 # SIDC для ліній (приклад: заміни на свої!)
 LINES_SIDC_BY_COLOR = {
     # HEX: SIDC
-    "#ff5533": "10062500001101010000",  # ЧЕРВОНИЙ
-    "#ffd70d": "10012500001101020000",  # ЖОВТИЙ
-    "#3752d9": "10032500001101020000",  # СИНІЙ
-    "#4dc04d": "10042500001101010000",  # ЗЕЛЕНИЙ
-    "#000000": "10066600001100000000",  # ЧОРНИЙ (унікальний випадок)
+    "#f44336": "10062500001101010000",  # Red
+    "#ffeb3b": "10012500001101020000",  # Yellow
+    "#2196f3": "10032500001101020000",  # Blue
+    "#4caf50": "10042500001101010000",  # Green
+    "#010101": "10066600001100000000",  # Black
 }
 
 # HEX для жовтого (за замовчуванням для "невідомих" маршрутів)
 DEFAULT_LINE_COLOR_TUPLE = (255, 215, 13)
-DEFAULT_LINE_HEX = '#ffd70d'
+DEFAULT_LINE_HEX = '#ffeb3b'
 DEFAULT_LINE_SIDC = LINES_SIDC_BY_COLOR[DEFAULT_LINE_HEX]
 
 
@@ -103,6 +103,11 @@ def find_nearest_supported_color(rgb):
 def get_line_sidc(hex_color):
     """SIDC для лінії за HEX"""
     hex_color = hex_color.lower()
+    # Normalize common red/yellow hex codes to match the SIDC map
+    if hex_color in ["#ff5533", "#f44336", "#d32f2f"]:
+        return LINES_SIDC_BY_COLOR["#f44336"]
+    if hex_color in ["#ffd70d", "#ffeb3b"]:
+        return LINES_SIDC_BY_COLOR["#ffeb3b"]
     return LINES_SIDC_BY_COLOR.get(hex_color, DEFAULT_LINE_SIDC)
 
 
@@ -1076,17 +1081,6 @@ class Main:
         self.input_file_path: Optional[str] = None
         self.output_directory_path: str = self.empty
         
-    def color_to_csv_rgba(self, color_value: Any) -> str:
-        """Повертає рядок формату R,G,B,1 для кольору"""
-        # Використовуємо існуючу функцію convert_color для отримання hex
-        color_hex = self.convert_color(color_value, 'hex')
-        h = color_hex.lstrip('#')
-        # Якщо hex має 8 символів (ARGB), беремо останні 6
-        if len(h) == 8:
-            h = h[2:]
-        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-        return f"{r},{g},{b},1"
-
     def _configure_styles(self):
         style = ttk.Style(self.main_window)
         style.theme_use('clam')
@@ -1313,124 +1307,104 @@ class Main:
             return base_save_path
         directory, filename = os.path.split(base_save_path)
         name_part, ext_part = os.path.splitext(filename)
-        name_part = re.sub(r'\(\d+\)$', '', name_part).strip()
-        new_filename = f"{name_part}({chunk_index + 1}){ext_part}"
-        return os.path.join(directory, new_filename)
-
-    def show_info(self):
-        messagebox.showinfo("Про програму",
-                            f"Nexus v{self.program_version}\nПрограма для пакетної конвертації та обробки геоданих.\n\nПідтримувані формати для читання:\n{', '.join(self.supported_read_formats)}\n\nПідтримувані формати для запису:\n{', '.join(fmt for fmt in self.list_of_formats if fmt not in ['.csv(макет)'])}")
-
-    def open_numeration_settings(self):
-        settings_win = tk.Toplevel(self.main_window)
-        settings_win.title("Налаштування нумерації")
-        settings_win.configure(background=self.C_BACKGROUND)
-        settings_win.transient(self.main_window)
-        settings_win.grab_set()
-        settings_win.resizable(False, False)
-
-        main_frame = ttk.Frame(settings_win, padding=15)
-        main_frame.pack(fill="both", expand=True)
-
-        ttk.Checkbutton(main_frame, text="Увімкнути нумерацію точок", variable=self.names_agree).pack(anchor="w",
-                                                                                                      pady=(0, 10))
-        numeration_frame = ttk.LabelFrame(main_frame, text="Параметри нумерації", style="TFrame", padding=10)
-        numeration_frame.pack(fill="x", expand=True, pady=5)
-        ttk.Label(numeration_frame, text="Спосіб нумерації:").pack(anchor="w")
-        numeration_combo = ttk.Combobox(numeration_frame, textvariable=self.chosen_numeration,
-                                        values=self.numerations, state="readonly", font=("Courier New", 9))
-        numeration_combo.pack(fill="x", pady=(2, 8))
-        numeration_combo.set(self.chosen_numeration.get())
-        ttk.Label(numeration_frame, text="Поворот осі сортування:").pack(anchor="w")
-        translation_combo = ttk.Combobox(numeration_frame, textvariable=self.chosen_translation,
-                                         values=self.translations, state="readonly", font=("Courier New", 9))
-        translation_combo.pack(fill="x", pady=(2, 8))
-        translation_combo.set(self.chosen_translation.get())
-        ttk.Checkbutton(numeration_frame, text="Виключити номери (30-40, 500-510)",
-                        variable=self.exceptions_agree).pack(anchor="w", pady=5)
-        ttk.Button(main_frame, text="Закрити", command=settings_win.destroy, style="Icon.TButton").pack(pady=(15, 0))
-
-        settings_win.update_idletasks()
-        main_x, main_y = self.main_window.winfo_x(), self.main_window.winfo_y()
-        main_w, main_h = self.main_window.winfo_width(), self.main_window.winfo_height()
-        win_w, win_h = settings_win.winfo_width(), settings_win.winfo_height()
-        x = main_x + (main_w // 2) - (win_w // 2)
-        y = main_y + (main_h // 2) - (win_h // 2)
-        settings_win.geometry(f"+{x}+{y}")
-        settings_win.focus_set()
-
-    def _process_data(self, file_content, color_override_english_name):
-        if not file_content: return None
-        content = copy.deepcopy(file_content)
-
-        if color_override_english_name != self.color_options[0]:
-            for item in content:
-                item["color"] = color_override_english_name
-                if 'milgeo:meta:color' in item:
-                    item['milgeo:meta:color'] = color_override_english_name
-
-        if self.names_agree.get():
-            points_to_numerate = [item for item in content if item.get('geometry_type', '').lower() == 'point']
-            other_items = [item for item in content if item.get('geometry_type', '').lower() != 'point']
-
-            if points_to_numerate:
-                numerated_points = self._apply_selected_numeration(points_to_numerate)
-                content = numerated_points + other_items
-        return content
-
-    def start_convertion(self):
-        if not self.file_list:
-            messagebox.showwarning("Увага", "Список файлів для конвертації порожній.")
-            return
-
-        readers = {".kml": self.read_kml, ".kme": self.read_kml, ".kmz": self.read_kmz, ".gpx": self.read_gpx,
-                   ".xlsx": self.read_xlsx, ".csv": self.read_csv, ".scene": self.read_scene,
-                   ".geojson": self.read_geojson, ".wpt": self.read_wpt, ".set": self.read_set, ".rte": self.read_rte,
-                   ".are": self.read_are, ".trk": self.read_trk, ".ldk": self.read_ldk}
-        writers = {".kml": self.create_kml, ".kme": self.create_kml, ".kmz": self.create_kmz,
-                   ".gpx": self.create_gpx, ".xlsx": self.create_xlsx, ".csv": self.create_csv,
-                   ".csv(макет)": self.create_csv,
-                   ".geojson": self.create_geojson, ".scene": self.create_scene}
-
-        total_files = len(self.file_list)
-        conversion_successful_count = 0
-
-        for i, file_data in enumerate(self.file_list):
-            current_file_basename = file_data['base_name']
-            self._update_status(f"ФАЙЛ {i + 1}/{total_files}: {current_file_basename}", self.C_BUTTON_HOVER)
-            self.main_window.update_idletasks()
-
-            try:
-                input_path = file_data['full_path']
-                self.file_name, self.file_ext = os.path.splitext(os.path.basename(input_path))
-                self.file_ext = self.file_ext.lower()
-
-                reader_func = readers.get(self.file_ext)
-                if not reader_func:
-                    self._update_status(f"Непідтримуваний формат для читання: {self.file_ext}", error=True)
-                    continue
-
-                file_content = reader_func(input_path)
-                if file_content is None or not file_content:
-                    messagebox.showwarning("Увага",
-                                           f"У файлі {current_file_basename} не знайдено даних або сталася помилка читання. Файл пропущено.")
-                    self._update_status(f"ПОМИЛКА ЧИТАННЯ: {current_file_basename}", warning=True)
-                    continue
-
-                processed_content = self._process_data(file_content, file_data['color_var'].get())
-                if processed_content is None:
-                    self._update_status(f"Помилка обробки даних: {current_file_basename}", error=True)
-                    continue
-
-                output_format = file_data['format_var'].get().lower()
-
-                writer_func = writers.get(output_format)
-                if not writer_func:
-                    messagebox.showerror("Формат не підтримується",
-                                         f"Конвертація у формат '{output_format}' не підтримується.")
-                    continue
-
-                clean_base_name = re.sub(r'\s*\(\d+\)$', '', self.file_name).strip()
+        name_part = re.sub(r'\(\d+\)<span class="math-inline">', '', name\_part\)\.strip\(\)
+new\_filename \= f"\{name\_part\}\(\{chunk\_index \+ 1\}\)\{ext\_part\}"
+return os\.path\.join\(directory, new\_filename\)
+def show\_info\(self\)\:
+messagebox\.showinfo\("Про програму",
+f"Nexus v\{self\.program\_version\}\\nПрограма для пакетної конвертації та обробки геоданих\.\\n\\nПідтримувані формати для читання\:\\n\{', '\.join\(self\.supported\_read\_formats\)\}\\n\\nПідтримувані формати для запису\:\\n\{', '\.join\(fmt for fmt in self\.list\_of\_formats if fmt not in \['\.csv\(макет\)'\]\)\}"\)
+def open\_numeration\_settings\(self\)\:
+settings\_win \= tk\.Toplevel\(self\.main\_window\)
+settings\_win\.title\("Налаштування нумерації"\)
+settings\_win\.configure\(background\=self\.C\_BACKGROUND\)
+settings\_win\.transient\(self\.main\_window\)
+settings\_win\.grab\_set\(\)
+settings\_win\.resizable\(False, False\)
+main\_frame \= ttk\.Frame\(settings\_win, padding\=15\)
+main\_frame\.pack\(fill\="both", expand\=True\)
+ttk\.Checkbutton\(main\_frame, text\="Увімкнути нумерацію точок", variable\=self\.names\_agree\)\.pack\(anchor\="w",
+pady\=\(0, 10\)\)
+numeration\_frame \= ttk\.LabelFrame\(main\_frame, text\="Параметри нумерації", style\="TFrame", padding\=10\)
+numeration\_frame\.pack\(fill\="x", expand\=True, pady\=5\)
+ttk\.Label\(numeration\_frame, text\="Спосіб нумерації\:"\)\.pack\(anchor\="w"\)
+numeration\_combo \= ttk\.Combobox\(numeration\_frame, textvariable\=self\.chosen\_numeration,
+values\=self\.numerations, state\="readonly", font\=\("Courier New", 9\)\)
+numeration\_combo\.pack\(fill\="x", pady\=\(2, 8\)\)
+numeration\_combo\.set\(self\.chosen\_numeration\.get\(\)\)
+ttk\.Label\(numeration\_frame, text\="Поворот осі сортування\:"\)\.pack\(anchor\="w"\)
+translation\_combo \= ttk\.Combobox\(numeration\_frame, textvariable\=self\.chosen\_translation,
+values\=self\.translations, state\="readonly", font\=\("Courier New", 9\)\)
+translation\_combo\.pack\(fill\="x", pady\=\(2, 8\)\)
+translation\_combo\.set\(self\.chosen\_translation\.get\(\)\)
+ttk\.Checkbutton\(numeration\_frame, text\="Виключити номери \(30\-40, 500\-510\)",
+variable\=self\.exceptions\_agree\)\.pack\(anchor\="w", pady\=5\)
+ttk\.Button\(main\_frame, text\="Закрити", command\=settings\_win\.destroy, style\="Icon\.TButton"\)\.pack\(pady\=\(15, 0\)\)
+settings\_win\.update\_idletasks\(\)
+main\_x, main\_y \= self\.main\_window\.winfo\_x\(\), self\.main\_window\.winfo\_y\(\)
+main\_w, main\_h \= self\.main\_window\.winfo\_width\(\), self\.main\_window\.winfo\_height\(\)
+win\_w, win\_h \= settings\_win\.winfo\_width\(\), settings\_win\.winfo\_height\(\)
+x \= main\_x \+ \(main\_w // 2\) \- \(win\_w // 2\)
+y \= main\_y \+ \(main\_h // 2\) \- \(win\_h // 2\)
+settings\_win\.geometry\(f"\+\{x\}\+\{y\}"\)
+settings\_win\.focus\_set\(\)
+def \_process\_data\(self, file\_content, color\_override\_english\_name\)\:
+if not file\_content\: return None
+content \= copy\.deepcopy\(file\_content\)
+if color\_override\_english\_name \!\= self\.color\_options\[0\]\:
+for item in content\:
+item\["color"\] \= color\_override\_english\_name
+if 'milgeo\:meta\:color' in item\:
+item\['milgeo\:meta\:color'\] \= color\_override\_english\_name
+if self\.names\_agree\.get\(\)\:
+points\_to\_numerate \= \[item for item in content if item\.get\('geometry\_type', ''\)\.lower\(\) \=\= 'point'\]
+other\_items \= \[item for item in content if item\.get\('geometry\_type', ''\)\.lower\(\) \!\= 'point'\]
+if points\_to\_numerate\:
+numerated\_points \= self\.\_apply\_selected\_numeration\(points\_to\_numerate\)
+content \= numerated\_points \+ other\_items
+return content
+def start\_convertion\(self\)\:
+if not self\.file\_list\:
+messagebox\.showwarning\("Увага", "Список файлів для конвертації порожній\."\)
+return
+readers \= \{"\.kml"\: self\.read\_kml, "\.kme"\: self\.read\_kml, "\.kmz"\: self\.read\_kmz, "\.gpx"\: self\.read\_gpx,
+"\.xlsx"\: self\.read\_xlsx, "\.csv"\: self\.read\_csv, "\.scene"\: self\.read\_scene,
+"\.geojson"\: self\.read\_geojson, "\.wpt"\: self\.read\_wpt, "\.set"\: self\.read\_set, "\.rte"\: self\.read\_rte,
+"\.are"\: self\.read\_are, "\.trk"\: self\.read\_trk, "\.ldk"\: self\.read\_ldk\}
+writers \= \{"\.kml"\: self\.create\_kml, "\.kme"\: self\.create\_kml, "\.kmz"\: self\.create\_kmz,
+"\.gpx"\: self\.create\_gpx, "\.xlsx"\: self\.create\_xlsx, "\.csv"\: self\.create\_csv,
+"\.csv\(макет\)"\: self\.create\_csv,
+"\.geojson"\: self\.create\_geojson, "\.scene"\: self\.create\_scene\}
+total\_files \= len\(self\.file\_list\)
+conversion\_successful\_count \= 0
+for i, file\_data in enumerate\(self\.file\_list\)\:
+current\_file\_basename \= file\_data\['base\_name'\]
+self\.\_update\_status\(f"ФАЙЛ \{i \+ 1\}/\{total\_files\}\: \{current\_file\_basename\}", self\.C\_BUTTON\_HOVER\)
+self\.main\_window\.update\_idletasks\(\)
+try\:
+input\_path \= file\_data\['full\_path'\]
+self\.file\_name, self\.file\_ext \= os\.path\.splitext\(os\.path\.basename\(input\_path\)\)
+self\.file\_ext \= self\.file\_ext\.lower\(\)
+reader\_func \= readers\.get\(self\.file\_ext\)
+if not reader\_func\:
+self\.\_update\_status\(f"Непідтримуваний формат для читання\: \{self\.file\_ext\}", error\=True\)
+continue
+file\_content \= reader\_func\(input\_path\)
+if file\_content is None or not file\_content\:
+messagebox\.showwarning\("Увага",
+f"У файлі \{current\_file\_basename\} не знайдено даних або сталася помилка читання\. Файл пропущено\."\)
+self\.\_update\_status\(f"ПОМИЛКА ЧИТАННЯ\: \{current\_file\_basename\}", warning\=True\)
+continue
+processed\_content \= self\.\_process\_data\(file\_content, file\_data\['color\_var'\]\.get\(\)\)
+if processed\_content is None\:
+self\.\_update\_status\(f"Помилка обробки даних\: \{current\_file\_basename\}", error\=True\)
+continue
+output\_format \= file\_data\['format\_var'\]\.get\(\)\.lower\(\)
+writer\_func \= writers\.get\(output\_format\)
+if not writer\_func\:
+messagebox\.showerror\("Формат не підтримується",
+f"Конвертація у формат '\{output\_format\}' не підтримується\."\)
+continue
+clean\_base\_name \= re\.sub\(r'\\s\*\\\(\\d\+\\\)</span>', '', self.file_name).strip()
                 suggested_name = f"new_{clean_base_name}{output_format.replace('(макет)', '')}"
 
                 if self.output_directory_path == self.empty or not os.path.isdir(self.output_directory_path):
