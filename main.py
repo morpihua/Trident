@@ -185,9 +185,14 @@ class Base:
 
 
 # --- Клас ApqFile ---
+import os
+import struct
+import base64
+import time
+import re
+from datetime import datetime, timezone
+
 class ApqFile(Base):
-    """Клас для парсингу бінарних файлів AlpineQuest."""
-    # Константи для "магічних чисел" (ідентифікаторів форматів)
     V100_HEADER_MAGIC_MASK = 0x50500000
     LDK_MAGIC_HEADER = 0x4C444B3A
     LDK_NODE_DATA_MAGIC = 0x00105555
@@ -201,22 +206,20 @@ class ApqFile(Base):
 
     def __init__(self, path=None, rawdata=None, file_type=None, rawname=None, rawts=None, verbosity=0,
                  gui_logger_func=None):
-        # ГОЛОВНЕ ВИПРАВЛЕННЯ ТУТ:
-        # Ми напряму передаємо потрібні аргументи, а не використовуємо **locals().
-        # Це виправляє помилку "TypeError: got an unexpected keyword argument 'path'".
         super().__init__(verbosity, gui_logger_func)
-
         self.path = path
         self.rawdata = rawdata
         self._file_type = file_type.lower() if file_type else None
         self.rawname = rawname
         self.rawts = rawts if rawts is not None else time.time()
+
         self.data_parsed = {}
         self.version = 0
         self.rawoffs = 0
         self.parse_successful = False
         load_success = False
 
+        # --- FILE LOADING ---
         if self.path:
             file_name_local = os.path.basename(self.path)
             ext_match = file_name_local.lower().split('.')[-1] if '.' in file_name_local else ''
@@ -233,12 +236,12 @@ class ApqFile(Base):
                     self.rawts = time.time()
                 load_success = True
             else:
-                self.error(f"Невідомий тип файлу для шляху: {self.path}")
+                self.error("Невідомий тип файлу для шляху: %s!", self.path)
                 raise ValueError(f"Unknown file type for {self.path}")
         elif self.rawdata is not None and self._file_type and self.rawname:
             valid_raw_types = ["wpt", "set", "rte", "are", "trk", "bin", "ldk"]
             if self._file_type not in valid_raw_types:
-                self.error(f"Невідомий тип файлу: {self._file_type}")
+                self.error("Невідомий тип файлу: %s!", self._file_type)
                 raise ValueError(f"Unknown raw type: {self._file_type}")
             self.path = self.rawname
             if self.rawts is None: self.rawts = time.time()
@@ -252,8 +255,6 @@ class ApqFile(Base):
             return
 
         self.rawsize = len(self.rawdata)
-        if self.verbosity >= 3: self.trace_hexdump(self.rawdata)
-
         parser_method_name = f"_parse_{self._file_type}"
 
         if hasattr(self, parser_method_name) and callable(getattr(self, parser_method_name)):
@@ -267,34 +268,6 @@ class ApqFile(Base):
             if self._file_type == "bin":
                 self.data_parsed['raw_content_b64'] = base64.b64encode(self.rawdata).decode('ascii')
                 self.parse_successful = True
-
-        aq_types_for_check = ["wpt", "set", "rte", "are", "trk", "ldk"]
-        if self.parse_successful and self.rawoffs != self.rawsize and self._file_type in aq_types_for_check:
-            remaining_bytes = self.rawsize - self.rawoffs
-            if remaining_bytes > 0 and (
-                    self.rawsize < 32 or remaining_bytes > 8 or remaining_bytes >= self.rawsize * 0.01):
-                self.debug('Залишились невикористані дані: %d байт з %d (0x%04x з 0x%04x).', remaining_bytes,
-                           self.rawsize, self.rawoffs, self.rawsize)
-
-        if not self.parse_successful and self._file_type in aq_types_for_check:
-            self.error("Помилка парсингу даних для %s (тип: %s)!", self.path or self.rawname or "невідомий файл",
-                       self._file_type or "невідомий тип")
-
-    def type(self):
-        return self._file_type
-
-    def data(self):
-        return self.get_parsed_data()
-
-    def _tell(self):
-        return self.rawoffs
-
-    def _seek(self, offset):
-        self.rawoffs = offset
-        return self.rawoffs
-
-    def _size(self):
-        return self.rawsize
 
     def _getval(self, val_type, arg=None):
         original_offset = self.rawoffs
@@ -370,8 +343,6 @@ class ApqFile(Base):
 
     def _getvalmulti(self, **kwargs_types):
         data_dict = {'_order': list(kwargs_types.keys())}
-        first_val_offset = self._tell()
-        all_none = True
         for key, type_info in kwargs_types.items():
             val = None
             arg_for_getval = None
@@ -382,13 +353,12 @@ class ApqFile(Base):
                     arg_for_getval = type_info[1]
             val = self._getval(type_name_for_getval, arg_for_getval)
             data_dict[key] = val
-            if val is not None:
-                all_none = False
         return data_dict
 
     def _check_header(self, *expected_file_versions):
         file_version = self._getval('int')
-        if file_version is None: return None
+        if file_version is None:
+            return None
         if (file_version & self.V100_HEADER_MAGIC_MASK) == self.V100_HEADER_MAGIC_MASK:
             file_version = (file_version & 0xff) + 100
         header_size = self._getval('int')
@@ -396,63 +366,334 @@ class ApqFile(Base):
             return None
         self.version = file_version
         return header_size
-        def _get_location(self):
-        # ... (Код без змін) ...
+
+    def _get_metadata(self):
+        n_meta_entries = self._getval('int')
+        if n_meta_entries is None or n_meta_entries < 0 or n_meta_entries > self.MAX_REASONABLE_ENTRIES:
+            return {}
+        meta = {}
+        for _ in range(n_meta_entries):
+            name_len = self._getval('int')
+            name_str = self._getval('string', name_len) if name_len else None
+            data_len_or_type = self._getval('int')
+            data_value = None
+            if data_len_or_type == -1:
+                data_value = self._getval('bool')
+            elif data_len_or_type == -2:
+                data_value = self._getval('long')
+            elif data_len_or_type == -3:
+                data_value = self._getval('double')
+            elif data_len_or_type == -4:
+                data_value = self._getval('int+raw')
+            elif data_len_or_type >= 0:
+                data_value = self._getval('string', data_len_or_type)
+            if name_str:
+                meta[name_str] = data_value
+        return meta
+
+    def _get_location(self):
+        loc = {}
+        loc['lon'] = self._getval('coords')
+        loc['lat'] = self._getval('coords')
+        loc['alt'] = self._getval('height')
+        loc['ts'] = self._getval('timestamp')
+        loc['acc'] = self._getval('accuracy')
+        loc['bar'] = self._getval('pressure')
         return loc
 
     def _get_waypoints(self):
-        # ... (Код без змін) ...
+        wp_list = []
+        n_wp = self._getval('int')
+        if n_wp is None or n_wp < 0 or n_wp > self.MAX_REASONABLE_ENTRIES:
+            return []
+        for _ in range(n_wp):
+            meta = self._get_metadata()
+            loc = self._get_location()
+            if meta is None or loc is None:
+                continue
+            wp_list.append({'meta': meta, 'location': loc})
         return wp_list
 
     def _get_locations(self):
-        # ... (Код без змін) ...
+        loc_list = []
+        n_loc = self._getval('int')
+        if n_loc is None or n_loc < 0 or n_loc > self.MAX_REASONABLE_ENTRIES * 10:
+            return []
+        for _ in range(n_loc):
+            loc = self._get_location()
+            if loc is not None:
+                loc_list.append(loc)
         return loc_list
 
     def _get_segment(self):
-        # ... (Код без змін) ...
+        seg_meta = self._get_metadata()
+        n_loc = self._getval('int')
+        locs_in_seg = []
+        for _ in range(n_loc if n_loc else 0):
+            loc = self._get_location()
+            if loc is not None:
+                locs_in_seg.append(loc)
         return {'meta': seg_meta, 'locations': locs_in_seg}
 
     def _get_segments(self):
-        # ... (Код без змін) ...
+        seg_list = []
+        n_seg = self._getval('int')
+        if n_seg is None or n_seg < 0 or n_seg > self.MAX_REASONABLE_ENTRIES:
+            return []
+        for _ in range(n_seg):
+            seg_data = self._get_segment()
+            if seg_data is not None:
+                seg_list.append(seg_data)
         return seg_list
 
     def _parse_wpt(self):
-        # ... (Код без змін) ...
+        h_size = self._check_header(2, 101)
+        if h_size is None:
+            return False
+        self.data_parsed['meta'] = self._get_metadata()
+        self.data_parsed['location'] = self._get_location()
         return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('location') is not None)
 
     def _parse_set(self):
-        # ... (Код без змін) ...
+        h_size = self._check_header(2, 101)
+        if h_size is None:
+            return False
+        self.data_parsed['meta'] = self._get_metadata()
+        self.data_parsed['waypoints'] = self._get_waypoints()
         return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('waypoints') is not None)
 
     def _parse_rte(self):
-        # ... (Код без змін) ...
+        h_size = self._check_header(2, 101)
+        if h_size is None:
+            return False
+        self.data_parsed['meta'] = self._get_metadata()
+        self.data_parsed['waypoints'] = self._get_waypoints()
         return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('waypoints') is not None)
 
     def _parse_are(self):
-        # ... (Код без змін) ...
+        h_size = self._check_header(2)
+        if h_size is None:
+            return False
+        self.data_parsed['meta'] = self._get_metadata()
+        self.data_parsed['locations'] = self._get_locations()
         return bool(self.data_parsed.get('meta') is not None and self.data_parsed.get('locations') is not None)
 
     def _parse_trk(self):
-        # ... (Код без змін) ...
+        h_size = self._check_header(2, 3, 101)
+        if h_size is None:
+            return False
+        self.data_parsed['meta'] = self._get_metadata()
+        self.data_parsed['waypoints'] = self._get_waypoints()
+        self.data_parsed['segments'] = self._get_segments()
         return True
 
     def _parse_ldk(self):
-        # ... (Код без змін) ...
+        hdr = self._getvalmulti(magic='int', archVersion='int', rootOffset='pointer',
+                                res1='long', res2='long', res3='long', res4='long')
+        if None in [hdr.get('magic'), hdr.get('archVersion'), hdr.get('rootOffset')]:
+            return False
+        root_offset_val = hdr.get('rootOffset')
+        self.data_parsed['root'] = self._get_node(root_offset_val)
         return self.data_parsed.get('root') is not None
 
     def _get_node_data(self, initial_offset):
-        # ... (Код без змін) ...
+        self._seek(initial_offset)
+        hdr = self._getvalmulti(magic='int', flags='int', totalSize='long', size='long', addOffset='pointer')
+        if hdr.get('magic') != self.LDK_NODE_DATA_MAGIC:
+            return None
+        data_chunks = []
+        main_data_block = self._getval('bin', hdr.get('size'))
+        if main_data_block is not None:
+            data_chunks.append(main_data_block)
+        current_add_offset_val = hdr.get('addOffset')
+        while current_add_offset_val:
+            self._seek(current_add_offset_val)
+            add_hdr = self._getvalmulti(magic='int', size='long', addOffset='pointer')
+            if add_hdr.get('magic') != self.LDK_NODE_ADDITIONAL_DATA_MAGIC:
+                break
+            additional_data_block = self._getval('bin', add_hdr.get('size'))
+            if additional_data_block is not None:
+                data_chunks.append(additional_data_block)
+            current_add_offset_val = add_hdr.get('addOffset')
         return b"".join(data_chunks)
 
     def _get_node(self, offset, current_path_prefix="/", uid_for_path=None):
-        # ... (Код без змін) ...
+        # Переміщаємось у файл
+        if offset >= self.rawsize:
+            self.error(f"Некоректний offset вузла LDK: {offset}")
+            return None
+
+        self._seek(offset)
+        hdr = self._getvalmulti(magic='int', flags='int', metaOffset='pointer', res1='long')
+        if None in [hdr.get('magic'), hdr.get('metaOffset')]:
+            self.error("Не вдалося прочитати заголовок вузла LDK (обов'язкові поля).")
+            return None
+        if hdr.get('magic') != self.LDK_NODE_MAGIC:
+            self.warning('Невідомий LDK node magic 0x%08x.', hdr.get('magic'))
+            return None
+
+        meta_offset_val = hdr.get('metaOffset')
+        prev_offs = self._tell()
+        self._seek(meta_offset_val + 0x20)
+        node_meta = self._get_metadata()
+        self._seek(prev_offs)
+
+        node_path = current_path_prefix
+        if uid_for_path is not None:
+            node_name_from_meta = node_meta.get('name') if node_meta else None
+            safe_node_name = re.sub(r'[\\/*?:"<>|]', '_', node_name_from_meta) if node_name_from_meta else None
+            node_path += f"{safe_node_name}/" if safe_node_name else f"UID{uid_for_path:08X}/"
+
+        node_entries_magic = self._getval('int')
+        if node_entries_magic is None:
+            self.error("Не вдалося прочитати magic для записів вузла LDK.")
+            return None
+
+        self.debug('LDK node path=%s, nodeEntriesMagic=0x%08x', node_path, node_entries_magic)
+        node_obj = {'path': node_path, 'nodes': [], 'files': [], 'meta': node_meta if node_meta else {}}
+        n_child, n_data, n_empty = 0, 0, 0
+
+        if node_entries_magic == self.LDK_NODE_LIST_MAGIC:
+            list_hdr = self._getvalmulti(nTotal='int', nChild='int', nData='int', addOffset='pointer')
+            if None in [list_hdr.get('nTotal'), list_hdr.get('nChild'), list_hdr.get('nData')]:
+                return None
+            n_child, n_data = list_hdr.get('nChild', 0), list_hdr.get('nData', 0)
+            n_empty = list_hdr.get('nTotal', 0) - n_child - n_data
+        elif node_entries_magic == self.LDK_NODE_TABLE_MAGIC:
+            self.warning("LDK: Обробка вузла типу 'таблиця' (0x00045555) може бути неповною.")
+            table_hdr_simple = self._getvalmulti(nChild='int', nData='int')
+            if table_hdr_simple.get('nChild') is not None and table_hdr_simple.get('nData') is not None:
+                n_child, n_data = table_hdr_simple.get('nChild', 0), table_hdr_simple.get('nData', 0)
+            else:
+                self.error("LDK: Не вдалося прочитати nChild/nData для вузла-таблиці. Структура невідома.")
+                return None
+        else:
+            self.warning('Неправильний LDK node entries magic 0x%08x.', node_entries_magic)
+            return None
+
+        entry_size = 12
+        child_defs, data_defs = [], []
+        for i in range(n_child):
+            d = self._getvalmulti(offset='pointer', uid='int')
+            if None in [d.get('offset'), d.get('uid')]:
+                self.error(f"Помилка читання child_def {i}")
+                return None
+            d['_ix'] = i
+            child_defs.append(d)
+            self.trace('LDK childDef[%d]: off=0x%x uid=0x%x', i, d['offset'], d['uid'])
+
+        if n_empty < 0:
+            self.warning(f"Негативна кількість порожніх записів ({n_empty}) у вузлі LDK.")
+            n_empty = 0
+        bytes_to_skip = n_empty * entry_size
+        if self._tell() + bytes_to_skip > self.rawsize:
+            self.error(f"LDK: Спроба пропустити порожні записи виходить за межі файлу.")
+            return None
+        self._seek(self._tell() + bytes_to_skip)
+
+        for i in range(n_data):
+            d = self._getvalmulti(offset='pointer', uid='int')
+            if None in [d.get('offset'), d.get('uid')]:
+                self.error(f"Помилка читання data_def {i}")
+                return None
+            d['_ix'] = i
+            data_defs.append(d)
+            self.trace('LDK dataDef[%d]: off=0x%x uid=0x%x', i, d['offset'], d['uid'])
+
+        # Розбір дочірніх вузлів
+        for entry_def in sorted(child_defs, key=lambda x: x['_ix']):
+            if entry_def['offset'] == 0:
+                self.warning(f"LDK: Нульовий offset для дочірнього вузла UID {entry_def['uid']}. Пропускається.")
+                continue
+            child_node = self._get_node(entry_def['offset'], node_path, entry_def['uid'])
+            if child_node is None:
+                self.error(f"Помилка парсингу дочірнього вузла LDK (offset {entry_def['offset']}).")
+                continue
+            child_node['order'] = entry_def['_ix']
+            node_obj['nodes'].append(child_node)
+
+        # Розбір файлів (даних) цього вузла
+        type_map_ldk = {0x65: 'wpt', 0x66: 'set', 0x67: 'rte', 0x68: 'trk', 0x69: 'are'}
+        ldk_original_filename = self.path or self.rawname or "unknown.ldk"
+        ldk_base_fn_for_contained = os.path.splitext(os.path.basename(ldk_original_filename))[0]
+
+        for entry_def in sorted(data_defs, key=lambda x: x['_ix']):
+            if entry_def['offset'] == 0:
+                self.warning(f"LDK: Нульовий offset для файлу UID {entry_def['uid']}. Пропускається.")
+                continue
+            file_bytes = self._get_node_data(entry_def['offset'])
+            if file_bytes is None or not file_bytes:
+                self.warning(f"Пропущено порожній/пошкоджений файл у LDK (UID {entry_def.get('uid', 'N/A')})")
+                continue
+            file_type_val = file_bytes[0]
+            actual_data_bytes = file_bytes[1:]
+            if not actual_data_bytes:
+                self.warning(f"LDK: Файл UID {entry_def['uid']} містить тільки байт типу. Пропускається.")
+                continue
+            type_str_from_map = type_map_ldk.get(file_type_val, 'bin')
+            path_part_for_name = node_obj['path'].strip('/').replace('/', '_')
+            if path_part_for_name:
+                path_part_for_name = "_" + path_part_for_name
+            contained_file_unique_name = f"{ldk_base_fn_for_contained}{path_part_for_name}_UID{entry_def.get('uid', 0):08X}.{type_str_from_map}"
+            # --- ДІАГНОСТИКА ---
+            print(f"LDK file UID={entry_def.get('uid')} type_byte=0x{file_type_val:02x} -> {type_str_from_map} ({contained_file_unique_name})")
+            node_obj['files'].append({
+                'name': contained_file_unique_name,
+                'data_b64': base64.b64encode(actual_data_bytes).decode('ascii'),
+                'type': type_str_from_map,
+                'size': len(actual_data_bytes),
+                'order': entry_def['_ix']
+            })
+
         return node_obj
 
-    def get_parsed_data(self):
-        # ... (Код без змін) ...
-        return output_data
+        def _tell(self):
+            return self.rawoffs
 
+        def _seek(self, offset):
+            self.rawoffs = offset
+            return self.rawoffs
 
+        def _size(self):
+            return self.rawsize
+
+        def type(self):
+            return self._file_type
+
+        def data(self):
+            return self.get_parsed_data()
+
+        def get_parsed_data(self):
+            output_data = {
+                'ts': self.rawts, 'type': self._file_type,
+                'path': self.path or self.rawname,
+                'file': os.path.basename(self.path or self.rawname or "unknown_file"),
+                'parse_successful': self.parse_successful
+            }
+            if self.parse_successful:
+                if self._file_type == 'wpt':
+                    output_data.update({'meta': self.data_parsed.get('meta'), 'location': self.data_parsed.get('location')})
+                elif self._file_type in ['set', 'rte']:
+                    output_data.update({'meta': self.data_parsed.get('meta'), 'waypoints': self.data_parsed.get('waypoints')})
+                elif self._file_type == 'are':
+                    output_data.update({'meta': self.data_parsed.get('meta'), 'locations': self.data_parsed.get('locations')})
+                elif self._file_type == 'trk':
+                    output_data.update({'meta': self.data_parsed.get('meta'),
+                                       'waypoints': self.data_parsed.get('waypoints'),
+                                       'segments': self.data_parsed.get('segments')})
+                elif self._file_type == 'ldk':
+                    output_data['root'] = self.data_parsed.get('root')
+                elif self._file_type == 'bin':
+                    output_data['raw_content_b64'] = self.data_parsed.get('raw_content_b64')
+            return output_data
+
+        def _seek(self, offset):
+            self.rawoffs = offset
+            return self.rawoffs
+
+        def _tell(self):
+            return self.rawoffs
+    
 class Main:
     """Головний клас програми з GUI для пакетної конвертації та обробки геоданих."""
 
@@ -957,7 +1198,7 @@ class Main:
         if total_files > 0:
             messagebox.showinfo("Завершено", f"Пакетна конвертація завершена.\nУспішно: {conversion_successful_count} з {total_files}.")
 
-    def _normalize_apq_data(self, apq_parsed_data, file_path_for_log=""):
+    def _normalize_apq_data(self, apq_parsed_data, file_path_for_log="", expand_lines_to_points=False):
         normalized_content = []
         if not apq_parsed_data or not isinstance(apq_parsed_data, dict) or not apq_parsed_data.get('parse_successful'):
             self._update_status(f"APQ парсер не повернув успішних даних для {file_path_for_log}", warning=True)
@@ -1021,7 +1262,6 @@ class Main:
                                        apq_source_file_type_for_item='wpt',
                                        source_file_global_meta_for_item=global_meta)
             if point: normalized_content.append(point)
-            print(f"Extracted {1 if point else 0} points from WPT")
 
         # --- SET, RTE
         elif apq_type in ['set', 'rte']:
@@ -1034,7 +1274,6 @@ class Main:
                     source_file_global_meta_for_item=global_meta
                 )
                 if point: normalized_content.append(point)
-            print(f"Extracted {len(normalized_content)} points from {apq_type.upper()}")
 
         # --- ARE (полігон)
         elif apq_type == 'are':
@@ -1058,7 +1297,6 @@ class Main:
                     'milgeo:meta:sidc': global_meta.get('sidc')
                 }
                 normalized_content.append(poly_item)
-            print(f"Extracted {len(area_points_data_for_polygon)} points from ARE (Polygon)")
 
         # --- TRK (POI + segments)
         elif apq_type == 'trk':
@@ -1101,8 +1339,36 @@ class Main:
                         'milgeo:meta:sidc': effective_seg_meta.get('sidc', global_meta.get('sidc'))
                     }
                     normalized_content.append(line_item)
-            points_in_all_segments = sum(len(seg.get('locations', [])) for seg in apq_parsed_data.get('segments', []))
-            print(f"Extracted {points_in_all_segments} points from all TRK segments")
+
+        # --- Розгортання ліній/полігонів у точки (для CSV, якщо потрібно)
+        if expand_lines_to_points:
+            expanded_points = []
+            for item in normalized_content:
+                if item.get('geometry_type') in ('LineString', 'Polygon'):
+                    for idx, pt in enumerate(item.get('points_data', [])):
+                        if pt.get('lon') is not None and pt.get('lat') is not None:
+                            pt_entry = {
+                                "name": f"{item.get('name')}_pt{idx+1}",
+                                "lat": pt.get('lat'), "lon": pt.get('lon'),
+                                "type": item.get('type') if 'type' in item else item.get('geometry_type'),
+                                "description": item.get('description'),
+                                "geometry_type": "Point",
+                                "color": item.get('color'),
+                                "original_location_data": pt,
+                                "apq_original_type": item.get('apq_original_type'),
+                                'milgeo:meta:name': item.get('name'),
+                                'milgeo:meta:color': item.get('color'),
+                                'milgeo:meta:desc': item.get('description'),
+                                'milgeo:meta:sidc': item.get('milgeo:meta:sidc')
+                            }
+                            expanded_points.append(pt_entry)
+            normalized_content += expanded_points
+
+        # Діагностика
+        print(f"[normalize_apq_data] {apq_type}: "
+              f"{sum(1 for i in normalized_content if i['geometry_type']=='Point')} pts, "
+              f"{sum(1 for i in normalized_content if i['geometry_type']=='LineString')} lines, "
+              f"{sum(1 for i in normalized_content if i['geometry_type']=='Polygon')} polygons")
 
         if not normalized_content and apq_type not in ['ldk', 'bin']:
             self._update_status(f"Увага: Не знайдено даних для нормалізації у {file_basename} (тип {apq_type})",
@@ -1149,6 +1415,9 @@ class Main:
         return self._read_specific_file(path, ".trk")
 
     def read_ldk(self, path):
+        """
+        Читання LDK-файлу з повною рекурсією по всіх nodes/files, витягує всі точки, лінії, полігони.
+        """
         self._update_status(f"Читання LDK: {os.path.basename(path)}...", self.C_BUTTON_HOVER)
         all_normalized_content = []
         stats = {'nodes': 0, 'files': 0, 'points': 0, 'lines': 0, 'polygons': 0}
@@ -1168,10 +1437,10 @@ class Main:
                 stats['nodes'] += 1
                 node_path = node_data.get('path', '')
 
-                # Логування вузла
+                # Діагностика структури LDK
                 print(f"{'  ' * depth}[LDK-NODE] path={node_path} files={len(node_data.get('files', []))} nodes={len(node_data.get('nodes', []))}")
 
-                # Обробка всіх файлів у цьому вузлі
+                # Обробка всіх файлів (маршрути, треки, полігони, точки)
                 for ldk_file_entry in node_data.get('files', []):
                     stats['files'] += 1
                     inner_file_type = ldk_file_entry.get('type')
@@ -1198,22 +1467,22 @@ class Main:
                             verbosity=0,
                             gui_logger_func=self._update_status
                         )
-
                         if contained_apq.parse_successful:
-                            normalized_data = self._normalize_apq_data(contained_apq.data(), inner_file_name)
+                            # ВАЖЛИВО! Розгортаємо всі лінії/полігони у точки для CSV (expand_lines_to_points=True)
+                            normalized_data = self._normalize_apq_data(
+                                contained_apq.data(), inner_file_name, expand_lines_to_points=True
+                            )
                             if normalized_data:
                                 for item_norm in normalized_data:
                                     item_norm['source_file'] = inner_file_name
                                     item_norm['ldk_parent'] = os.path.basename(parent_original_path)
-
-                                    # Підрахунок типів
+                                    # Підрахунок типів для діагностики
                                     if item_norm.get('geometry_type') == 'Point':
                                         stats['points'] += 1
                                     elif item_norm.get('geometry_type') == 'LineString':
                                         stats['lines'] += 1
                                     elif item_norm.get('geometry_type') == 'Polygon':
                                         stats['polygons'] += 1
-
                                 all_normalized_content.extend(normalized_data)
                             else:
                                 print(f"{'  ' * depth}[LDK-FILE] {inner_file_name}: дані не нормалізовані")
@@ -1226,7 +1495,7 @@ class Main:
 
                 # Рекурсивно обробити всі дочірні вузли
                 for child_node in node_data.get('nodes', []):
-                    extract_and_normalize_from_ldk_node(child_node, parent_original_path, depth=depth + 1)
+                    extract_and_normalize_from_ldk_node(child_node, parent_original_path, depth=depth+1)
 
             # Запуск рекурсії від root
             if parsed_ldk_root_data and parsed_ldk_root_data.get('root'):
@@ -1246,6 +1515,7 @@ class Main:
             return None
 
         return all_normalized_content if all_normalized_content else None
+
 
     def _read_kml_from_content(self, kml_content, source_filename="KML"):
         result = []
@@ -1845,12 +2115,11 @@ class Main:
                         name = item.get('name', '')
                         ts = item.get('original_location_data', {}).get('ts')
                         observation_datetime = ""
-                        if ts:
+                        if ts is not None and isinstance(ts, (int, float)) and ts > 0:
                             try:
-                                observation_datetime = datetime.fromtimestamp(ts, timezone.utc).strftime(
-                                    '%Y-%m-%dT%H:%M:%S')
-                            except (ValueError, TypeError):
-                                pass
+                                observation_datetime = datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+                            except (ValueError, TypeError, OSError):
+                                observation_datetime = ""   
 
                         row = [""] * len(headers)
                         row[3] = name
