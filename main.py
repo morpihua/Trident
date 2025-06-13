@@ -62,7 +62,6 @@ LINES_SIDC_BY_COLOR = {
 }
 
 # За замовчуванням для "невідомих" маршрутів
-DEFAULT_LINE_COLOR_TUPLE = (255, 215, 13)
 DEFAULT_LINE_HEX = '#ffeb3b'
 DEFAULT_LINE_SIDC = LINES_SIDC_BY_COLOR[DEFAULT_LINE_HEX]
 
@@ -184,15 +183,8 @@ class Base:
             return None
 
 
-# --- Клас ApqFile ---
-import os
-import struct
-import base64
-import time
-import re
-from datetime import datetime, timezone
-
 class ApqFile(Base):
+    """Клас для парсингу бінарних файлів AlpineQuest (.wpt, .set, .rte, .are, .trk, .ldk)."""
     V100_HEADER_MAGIC_MASK = 0x50500000
     LDK_MAGIC_HEADER = 0x4C444B3A
     LDK_NODE_DATA_MAGIC = 0x00105555
@@ -374,19 +366,23 @@ class ApqFile(Base):
         meta = {}
         for _ in range(n_meta_entries):
             name_len = self._getval('int')
-            name_str = self._getval('string', name_len) if name_len else None
+            name_str = self._getval('string', name_len) if name_len is not None and name_len > 0 else (None if name_len is None else "")
+
             data_len_or_type = self._getval('int')
             data_value = None
-            if data_len_or_type == -1:
-                data_value = self._getval('bool')
-            elif data_len_or_type == -2:
-                data_value = self._getval('long')
-            elif data_len_or_type == -3:
-                data_value = self._getval('double')
-            elif data_len_or_type == -4:
-                data_value = self._getval('int+raw')
-            elif data_len_or_type >= 0:
-                data_value = self._getval('string', data_len_or_type)
+            
+            if data_len_or_type is not None:
+                if data_len_or_type == -1:
+                    data_value = self._getval('bool')
+                elif data_len_or_type == -2:
+                    data_value = self._getval('long')
+                elif data_len_or_type == -3:
+                    data_value = self._getval('double')
+                elif data_len_or_type == -4:
+                    data_value = self._getval('int+raw')
+                elif data_len_or_type >= 0:
+                    data_value = self._getval('string', data_len_or_type)
+            
             if name_str:
                 meta[name_str] = data_value
         return meta
@@ -518,7 +514,6 @@ class ApqFile(Base):
         return b"".join(data_chunks)
 
     def _get_node(self, offset, current_path_prefix="/", uid_for_path=None):
-        # Переміщаємось у файл
         if offset >= self.rawsize:
             self.error(f"Некоректний offset вузла LDK: {offset}")
             return None
@@ -635,7 +630,6 @@ class ApqFile(Base):
             if path_part_for_name:
                 path_part_for_name = "_" + path_part_for_name
             contained_file_unique_name = f"{ldk_base_fn_for_contained}{path_part_for_name}_UID{entry_def.get('uid', 0):08X}.{type_str_from_map}"
-            # --- ДІАГНОСТИКА ---
             print(f"LDK file UID={entry_def.get('uid')} type_byte=0x{file_type_val:02x} -> {type_str_from_map} ({contained_file_unique_name})")
             node_obj['files'].append({
                 'name': contained_file_unique_name,
@@ -647,61 +641,58 @@ class ApqFile(Base):
 
         return node_obj
 
-        def _tell(self):
-            return self.rawoffs
+    def _tell(self):
+        return self.rawoffs
 
-        def _seek(self, offset):
-            self.rawoffs = offset
-            return self.rawoffs
-
-        def _size(self):
-            return self.rawsize
-
-        def type(self):
-            return self._file_type
-
-        def data(self):
-            return self.get_parsed_data()
-
-        def get_parsed_data(self):
-            output_data = {
-                'ts': self.rawts, 'type': self._file_type,
-                'path': self.path or self.rawname,
-                'file': os.path.basename(self.path or self.rawname or "unknown_file"),
-                'parse_successful': self.parse_successful
-            }
-            if self.parse_successful:
-                if self._file_type == 'wpt':
-                    output_data.update({'meta': self.data_parsed.get('meta'), 'location': self.data_parsed.get('location')})
-                elif self._file_type in ['set', 'rte']:
-                    output_data.update({'meta': self.data_parsed.get('meta'), 'waypoints': self.data_parsed.get('waypoints')})
-                elif self._file_type == 'are':
-                    output_data.update({'meta': self.data_parsed.get('meta'), 'locations': self.data_parsed.get('locations')})
-                elif self._file_type == 'trk':
-                    output_data.update({'meta': self.data_parsed.get('meta'),
-                                       'waypoints': self.data_parsed.get('waypoints'),
-                                       'segments': self.data_parsed.get('segments')})
-                elif self._file_type == 'ldk':
-                    output_data['root'] = self.data_parsed.get('root')
-                elif self._file_type == 'bin':
-                    output_data['raw_content_b64'] = self.data_parsed.get('raw_content_b64')
-            return output_data
-
-        def _seek(self, offset):
-            self.rawoffs = offset
-            return self.rawoffs
-
-        def _tell(self):
-            return self.rawoffs
+    def _seek(self, offset):
+        self.rawoffs = offset
+        return self.rawoffs
     
+    def _size(self):
+        return self.rawsize
+
+    def type(self):
+        return self._file_type
+
+    def data(self):
+        return self.get_parsed_data()
+
+    def get_parsed_data(self):
+        output_data = {
+            'ts': self.rawts, 'type': self._file_type,
+            'path': self.path or self.rawname,
+            'file': os.path.basename(self.path or self.rawname or "unknown_file"),
+            'parse_successful': self.parse_successful
+        }
+        if self.parse_successful:
+            if self._file_type == 'wpt':
+                output_data.update({'meta': self.data_parsed.get('meta'), 'location': self.data_parsed.get('location')})
+            elif self._file_type in ['set', 'rte']:
+                output_data.update({'meta': self.data_parsed.get('meta'), 'waypoints': self.data_parsed.get('waypoints')})
+            elif self._file_type == 'are':
+                output_data.update({'meta': self.data_parsed.get('meta'), 'locations': self.data_parsed.get('locations')})
+            elif self._file_type == 'trk':
+                output_data.update({'meta': self.data_parsed.get('meta'),
+                                    'waypoints': self.data_parsed.get('waypoints'),
+                                    'segments': self.data_parsed.get('segments')})
+            elif self._file_type == 'ldk':
+                output_data['root'] = self.data_parsed.get('root')
+            elif self._file_type == 'bin':
+                output_data['raw_content_b64'] = self.data_parsed.get('raw_content_b64')
+        return output_data
+
+
 class Main:
     """Головний клас програми з GUI для пакетної конвертації та обробки геоданих."""
 
     MAX_FILES: int = 100
     CSV_CHUNK_SIZE: int = 2000
 
+    # ==============================================================================
+    # ІНІЦІАЛІЗАЦІЯ ТА НАЛАШТУВАННЯ
+    # ==============================================================================
     def __init__(self):
-        self.program_version: str = "8.7.1_ukr_comments"
+        self.program_version: str = "8.7.4_csv_fix"
         self.empty: str = "Не вибрано"
         self.file_ext: Optional[str] = None
         self.file_name: Optional[str] = None
@@ -777,7 +768,7 @@ class Main:
 
         self.input_file_path: Optional[str] = None
         self.output_directory_path: str = self.empty
-        
+
     def _configure_styles(self):
         style = ttk.Style(self.main_window)
         style.theme_use('clam')
@@ -801,13 +792,6 @@ class Main:
         style.configure("TMenubutton", background="#4F4F4F", foreground=self.C_TEXT, font=("Courier New", 9),
                         borderwidth=1, relief='raised', arrowcolor=self.C_TEXT)
         style.map("TMenubutton", background=[('active', "#646464")])
-
-    def run(self):
-        self.main_window.mainloop()
-
-    def exit(self):
-        if messagebox.askokcancel("Вихід", "Ви впевнені, що хочете вийти?"):
-            self.main_window.destroy()
 
     def _build_main_ui(self):
         self.main_window.rowconfigure(0, weight=0)
@@ -836,7 +820,7 @@ class Main:
         right_sidebar = ttk.Frame(top_container, width=50, style="Side.TFrame")
         right_sidebar.grid(row=0, column=2, sticky="ns", padx=(2, 5))
         self.btn_open_file = ttk.Button(right_sidebar, text="F", style='Icon.TButton',
-                                        command=self.add_files_to_list, width=2)
+                                          command=self.add_files_to_list, width=2)
         self.btn_open_file.pack(pady=(5, 5), padx=5, fill='x')
         Tooltip(self.btn_open_file, "Додати файли", background=self.C_SIDEBAR, foreground=self.C_TEXT)
         self.play_button = ttk.Button(right_sidebar, text="▶", style='Icon.TButton', command=self.start_convertion,
@@ -854,269 +838,32 @@ class Main:
         scrollbar.pack(side="right", fill="y", padx=(0, 1), pady=(1, 1))
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
-    def _on_canvas_configure(self, event):
-        self.canvas.itemconfig(self.canvas_window, width=event.width)
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+    def run(self):
+        self.main_window.mainloop()
 
-    def _redraw_file_list(self):
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
-        for i, file_data in enumerate(self.file_list):
-            item_frame = ttk.Frame(self.scrollable_frame, style="List.TFrame", padding=(5, 2))
-            item_frame.pack(fill='x', expand=True)
-            label_text = f"{i + 1}. {file_data['base_name']}"
-            if len(label_text) > 40: label_text = label_text[:37] + "..."
-            label = ttk.Label(item_frame, text=label_text, style="List.TLabel", anchor='w')
-            label.pack(side='left', fill='x', expand=True, padx=(0, 5))
-            format_mb = ttk.Menubutton(item_frame, text=file_data['format_var'].get(), style="TMenubutton", width=10)
-            format_menu_tk = tk.Menu(format_mb, tearoff=0, bg=self.C_SIDEBAR, fg=self.C_TEXT,
-                                     activebackground=self.C_BUTTON_HOVER)
-            for fmt_option in self.list_of_formats:
-                format_menu_tk.add_radiobutton(label=fmt_option, variable=file_data['format_var'], value=fmt_option,
-                                               command=lambda var=file_data['format_var'], button=format_mb,
-                                                              val=fmt_option: self._update_menubutton_text(var, button,
-                                                                                                          val))
-            format_mb['menu'] = format_menu_tk
-            format_mb.pack(side='left', padx=3)
-            color_mb = ttk.Menubutton(item_frame,
-                                      text=self.colors_en_ua.get(file_data['color_var'].get(),
-                                                                file_data['color_var'].get()), style="TMenubutton",
-                                      width=12)
-            color_menu_tk = tk.Menu(color_mb, tearoff=0, bg=self.C_SIDEBAR, fg=self.C_TEXT,
-                                    activebackground=self.C_BUTTON_HOVER)
-            for color_option in self.color_options:
-                disp_name = self.colors_en_ua.get(color_option, color_option)
-                color_menu_tk.add_radiobutton(label=disp_name, variable=file_data['color_var'], value=color_option,
-                                              command=lambda var=file_data['color_var'], button=color_mb,
-                                                             val_en=color_option: self._update_menubutton_text(var,
-                                                                                                               button,
-                                                                                                               val_en))
-            color_mb['menu'] = color_menu_tk
-            color_mb.pack(side='left', padx=3)
-            remove_btn = ttk.Button(item_frame, text="X", style='Remove.TButton', width=2,
-                                    command=lambda fd=file_data: self._remove_file(fd))
-            remove_btn.pack(side='left', padx=(3, 0))
-        if not self.file_list:
-            self._update_status("ДОДАЙТЕ ФАЙЛИ", self.C_STATUS_DEFAULT)
-            self.play_button.config(state="disabled")
-            if self.list_is_visible:
-                self.list_container.grid_forget()
-                self.list_is_visible = False
-                self.main_window.geometry("450x120")
-        else:
-            status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛ(ІВ)"
-            if len(self.file_list) == 1:
-                status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛ"
-            elif 2 <= len(self.file_list) <= 4:
-                status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛИ"
-            self._update_status(status_text, self.C_ACCENT_SUCCESS)
-            self.play_button.config(state="normal")
-        self.scrollable_frame.update_idletasks()
-        self.canvas.config(scrollregion=self.canvas.bbox("all"))
-        self.canvas.itemconfig(self.canvas_window, width=self.canvas.winfo_width())
+    def exit(self):
+        if messagebox.askokcancel("Вихід", "Ви впевнені, що хочете вийти?"):
+            self.main_window.destroy()
 
-    def _update_menubutton_text(self, var, menubutton, value_english):
-        var.set(value_english)
-        display_text = self.colors_en_ua.get(value_english, value_english)
-        if not display_text: display_text = value_english
-        menubutton.config(text=display_text)
-
-    def _remove_file(self, file_to_remove):
-        self.file_list.remove(file_to_remove)
-        if not self.file_list and self.list_is_visible:
-            self.list_container.grid_forget()
-            self.list_is_visible = False
-            self.main_window.geometry("450x120")
-        self._redraw_file_list()
-
-    def add_files_to_list(self):
-        file_types = [("Підтримувані файли", " ".join(f"*{ext}" for ext in self.supported_read_formats)),
-                      ("AlpineQuest файли", ".wpt .set .rte .are .trk .ldk"), ("KML/KMZ/KME", ".kml .kmz .kme"),
-                      ("GPS Exchange", ".gpx"), ("Excel", ".xlsx"), ("CSV", ".csv"), ("SCENE JSON", ".scene"),
-                      ("Всі файли", "*.*")]
-        paths = filedialog.askopenfilenames(filetypes=file_types, title="Виберіть файли для конвертації")
-        new_files_added = False
-        if paths:
-            for path in paths:
-                if any(f['full_path'] == path for f in self.file_list):
-                    self._update_status(f"Файл вже у списку: {os.path.basename(path)}", warning=True)
-                    continue
-                if len(self.file_list) >= self.MAX_FILES:
-                    messagebox.showwarning("Ліміт файлів",
-                                           f"Максимальна кількість файлів у списку ({self.MAX_FILES}) досягнута.")
-                    break
-                base_name = os.path.basename(path)
-                file_ext = os.path.splitext(base_name)[1].lower()
-                if file_ext not in self.supported_read_formats:
-                    messagebox.showwarning("Формат не підтримується",
-                                           f"Програма не може імпортувати дані з файлів формату '{file_ext}'.")
-                    continue
-                default_export_format = ".kml"
-                if file_ext in [".wpt", ".set", ".rte", ".are", ".trk", ".ldk", ".kmz", ".kme"]:
-                    default_export_format = ".kml"
-                elif file_ext == ".gpx":
-                    default_export_format = ".gpx"
-                elif file_ext == ".xlsx":
-                    default_export_format = ".xlsx"
-                elif file_ext == ".csv":
-                    default_export_format = ".csv"
-                elif file_ext == ".scene":
-                    default_export_format = ".geojson"
-                file_data = {"full_path": path, "base_name": base_name,
-                             "format_var": tk.StringVar(value=default_export_format),
-                             "color_var": tk.StringVar(value=self.color_options[0])}
-                self.file_list.append(file_data)
-                new_files_added = True
-            if new_files_added and not self.list_is_visible:
-                self.list_container.grid(row=1, column=0, columnspan=3, sticky="nsew", padx=5, pady=(2, 5))
-                self.main_window.rowconfigure(1, weight=3)
-                self.list_is_visible = True
-                self.main_window.geometry("650x400")
-            if new_files_added:
-                self._redraw_file_list()
-            elif not self.file_list:
-                self._update_status("ФАЙЛИ НЕ ДОДАНО", self.C_STATUS_DEFAULT)
-
-    def _update_status(self, text, color=None, error=False, warning=False):
-        if error:
-            final_color = self.C_ACCENT_ERROR
-        elif warning:
-            final_color = self.C_ACCENT_DONE
-        elif color:
-            final_color = color
-        else:
-            final_color = self.C_TEXT
-
-        if not error and not warning and not color and self.status_label.cget("background") == self.C_STATUS_DEFAULT:
-            current_bg = self.C_STATUS_DEFAULT
-        elif not error and not warning and not color:
-            current_bg = self.C_STATUS_DEFAULT if self.status_label.cget(
-                "background") == self.C_STATUS_DEFAULT else self.C_BACKGROUND
-        else:
-            current_bg = final_color
-
-        self.status_label.config(text=text.upper(), background=current_bg, foreground=self.C_TEXT)
-        if self.main_window.winfo_exists():
-            self.main_window.update_idletasks()
-
-    def _get_chunked_save_path(self, base_save_path, chunk_index):
-        if chunk_index == 0:
-            return base_save_path
-        directory, filename = os.path.split(base_save_path)
-        name_part, ext_part = os.path.splitext(filename)
-        name_part = re.sub(r'\(\d+\)$', '', name_part).strip()
-        new_filename = f"{name_part}({chunk_index + 1}){ext_part}"
-        return os.path.join(directory, new_filename)
-        
-    def show_info(self):
-        messagebox.showinfo(
-            "Про програму",
-            f"Nexus v{self.program_version}\n"
-            "Програма для пакетної конвертації та обробки геоданих.\n\n"
-            f"Підтримувані формати для читання:\n{', '.join(self.supported_read_formats)}\n\n"
-            f"Підтримувані формати для запису:\n{', '.join(fmt for fmt in self.list_of_formats if fmt != '.csv(макет)')}"
-        )
-        
-    def open_numeration_settings(self):
-        settings_win = tk.Toplevel(self.main_window)
-        settings_win.title("Налаштування нумерації")
-        settings_win.configure(background=self.C_BACKGROUND)
-        settings_win.transient(self.main_window)
-        settings_win.grab_set()
-        settings_win.resizable(False, False)
-
-        main_frame = ttk.Frame(settings_win, padding=15)
-        main_frame.pack(fill="both", expand=True)
-
-        ttk.Checkbutton(main_frame, text="Увімкнути нумерацію точок", variable=self.names_agree).pack(anchor="w", pady=(0, 10))
-
-        numeration_frame = ttk.LabelFrame(main_frame, text="Параметри нумерації", style="TFrame", padding=10)
-        numeration_frame.pack(fill="x", expand=True, pady=5)
-        ttk.Label(numeration_frame, text="Спосіб нумерації:").pack(anchor="w")
-        numeration_combo = ttk.Combobox(
-            numeration_frame, textvariable=self.chosen_numeration,
-            values=self.numerations, state="readonly", font=("Courier New", 9)
-        )
-        numeration_combo.pack(fill="x", pady=(2, 8))
-        numeration_combo.set(self.chosen_numeration.get())
-
-        ttk.Label(numeration_frame, text="Поворот осі сортування:").pack(anchor="w")
-        translation_combo = ttk.Combobox(
-            numeration_frame, textvariable=self.chosen_translation,
-            values=self.translations, state="readonly", font=("Courier New", 9)
-        )
-        translation_combo.pack(fill="x", pady=(2, 8))
-        translation_combo.set(self.chosen_translation.get())
-
-        ttk.Checkbutton(
-            numeration_frame,
-            text="Виключити номери (30-40, 500-510)",
-            variable=self.exceptions_agree
-        ).pack(anchor="w", pady=5)
-
-        ttk.Button(main_frame, text="Закрити", command=settings_win.destroy, style="Icon.TButton").pack(pady=(15, 0))
-
-        settings_win.update_idletasks()
-        main_x, main_y = self.main_window.winfo_x(), self.main_window.winfo_y()
-        main_w, main_h = self.main_window.winfo_width(), self.main_window.winfo_height()
-        win_w, win_h = settings_win.winfo_width(), settings_win.winfo_height()
-        x = main_x + (main_w // 2) - (win_w // 2)
-        y = main_y + (main_h // 2) - (win_h // 2)
-        settings_win.geometry(f"+{x}+{y}")
-        settings_win.focus_set()
-        
-    def _process_data(self, file_content, color_override_english_name):
-        if not file_content:
-            return None
-        content = copy.deepcopy(file_content)
-
-        if color_override_english_name != self.color_options[0]:
-            for item in content:
-                item["color"] = color_override_english_name
-                if 'milgeo:meta:color' in item:
-                    item['milgeo:meta:color'] = color_override_english_name
-
-        if self.names_agree.get():
-            points_to_numerate = [item for item in content if item.get('geometry_type', '').lower() == 'point']
-            other_items = [item for item in content if item.get('geometry_type', '').lower() != 'point']
-
-            if points_to_numerate:
-                numerated_points = self._apply_selected_numeration(points_to_numerate)
-                content = numerated_points + other_items
-
-        return content
-        
+    # ==============================================================================
+    # ГОЛОВНИЙ ПРОЦЕС КОНВЕРТАЦІЇ
+    # ==============================================================================
     def start_convertion(self):
         if not self.file_list:
             messagebox.showwarning("Увага", "Список файлів для конвертації порожній.")
             return
         readers = {
-            ".kml": self.read_kml,
-            ".kme": self.read_kml,
-            ".kmz": self.read_kmz,
-            ".gpx": self.read_gpx,
-            ".xlsx": self.read_xlsx,
-            ".csv": self.read_csv,
-            ".scene": self.read_scene,
-            ".geojson": self.read_geojson,
-            ".wpt": self.read_wpt,
-            ".set": self.read_set,
-            ".rte": self.read_rte,
-            ".are": self.read_are,
-            ".trk": self.read_trk,
-            ".ldk": self.read_ldk,
+            ".kml": self.read_kml, ".kme": self.read_kml, ".kmz": self.read_kmz,
+            ".gpx": self.read_gpx, ".xlsx": self.read_xlsx, ".csv": self.read_csv,
+            ".scene": self.read_scene, ".geojson": self.read_geojson,
+            ".wpt": self.read_wpt, ".set": self.read_set, ".rte": self.read_rte,
+            ".are": self.read_are, ".trk": self.read_trk, ".ldk": self.read_ldk,
         }
 
         writers = {
-            ".kml": self.create_kml,
-            ".kme": self.create_kml,
-            ".kmz": self.create_kmz,
-            ".gpx": self.create_gpx,
-            ".xlsx": self.create_xlsx,
-            ".csv": self.create_csv,
-            ".csv(макет)": self.create_csv,
-            ".geojson": self.create_geojson,
-            ".scene": self.create_scene,
+            ".kml": self.create_kml, ".kmz": self.create_kmz, ".gpx": self.create_gpx,
+            ".xlsx": self.create_xlsx, ".csv": self.create_csv, ".csv(макет)": self.create_csv,
+            ".geojson": self.create_geojson, ".scene": self.create_scene,
         }
         total_files = len(self.file_list)
         conversion_successful_count = 0
@@ -1198,6 +945,30 @@ class Main:
         if total_files > 0:
             messagebox.showinfo("Завершено", f"Пакетна конвертація завершена.\nУспішно: {conversion_successful_count} з {total_files}.")
 
+    def _process_data(self, file_content, color_override_english_name):
+        if not file_content:
+            return None
+        content = copy.deepcopy(file_content)
+
+        if color_override_english_name != self.color_options[0]:
+            for item in content:
+                item["color"] = color_override_english_name
+                if 'milgeo:meta:color' in item:
+                    item['milgeo:meta:color'] = color_override_english_name
+
+        if self.names_agree.get():
+            points_to_numerate = [item for item in content if item.get('geometry_type', '').lower() == 'point']
+            other_items = [item for item in content if item.get('geometry_type', '').lower() != 'point']
+
+            if points_to_numerate:
+                numerated_points = self._apply_selected_numeration(points_to_numerate)
+                content = numerated_points + other_items
+
+        return content
+
+    # ==============================================================================
+    # МЕТОДИ ЧИТАННЯ ФАЙЛІВ
+    # ==============================================================================
     def _normalize_apq_data(self, apq_parsed_data, file_path_for_log="", expand_lines_to_points=False):
         normalized_content = []
         if not apq_parsed_data or not isinstance(apq_parsed_data, dict) or not apq_parsed_data.get('parse_successful'):
@@ -1255,7 +1026,6 @@ class Main:
             }
             return entry
 
-        # --- WPT
         if apq_type == 'wpt':
             loc = apq_parsed_data.get('location')
             point = _create_point_dict(loc, global_meta, "Waypoint",
@@ -1263,7 +1033,6 @@ class Main:
                                        source_file_global_meta_for_item=global_meta)
             if point: normalized_content.append(point)
 
-        # --- SET, RTE
         elif apq_type in ['set', 'rte']:
             waypoints_list = apq_parsed_data.get('waypoints', [])
             default_prefix = global_meta.get('name', apq_type.upper())
@@ -1275,7 +1044,6 @@ class Main:
                 )
                 if point: normalized_content.append(point)
 
-        # --- ARE (полігон)
         elif apq_type == 'are':
             locations_list = apq_parsed_data.get('locations', [])
             area_name = global_meta.get('name', 'Area')
@@ -1298,10 +1066,8 @@ class Main:
                 }
                 normalized_content.append(poly_item)
 
-        # --- TRK (POI + segments)
         elif apq_type == 'trk':
             track_default_name = global_meta.get('name', 'Track')
-            # POI точки
             for idx, poi_entry in enumerate(apq_parsed_data.get('waypoints', [])):
                 point = _create_point_dict(
                     poi_entry.get('location'), poi_entry.get('meta', {}),
@@ -1310,7 +1076,7 @@ class Main:
                     source_file_global_meta_for_item=global_meta
                 )
                 if point: normalized_content.append(point)
-            # Сегменти (лінії)
+
             segments_data = apq_parsed_data.get('segments', [])
             for seg_idx, segment_item in enumerate(segments_data):
                 seg_locs_data = segment_item.get('locations', [])
@@ -1340,7 +1106,6 @@ class Main:
                     }
                     normalized_content.append(line_item)
 
-        # --- Розгортання ліній/полігонів у точки (для CSV, якщо потрібно)
         if expand_lines_to_points:
             expanded_points = []
             for item in normalized_content:
@@ -1364,20 +1129,13 @@ class Main:
                             expanded_points.append(pt_entry)
             normalized_content += expanded_points
 
-        # Діагностика
-        print(f"[normalize_apq_data] {apq_type}: "
-              f"{sum(1 for i in normalized_content if i['geometry_type']=='Point')} pts, "
-              f"{sum(1 for i in normalized_content if i['geometry_type']=='LineString')} lines, "
-              f"{sum(1 for i in normalized_content if i['geometry_type']=='Polygon')} polygons")
-
         if not normalized_content and apq_type not in ['ldk', 'bin']:
             self._update_status(f"Увага: Не знайдено даних для нормалізації у {file_basename} (тип {apq_type})",
                                 warning=True)
         return normalized_content
 
-    def _read_specific_file(self, file_path_to_read, expected_file_extension):
-        self.input_file_path = file_path_to_read
-        content_list = []
+    def _read_specific_apq_file(self, file_path_to_read):
+        """Уніфікований метод для читання та парсингу файлів APQ."""
         file_basename_log = os.path.basename(file_path_to_read)
         try:
             apq_parser_instance = ApqFile(path=file_path_to_read, verbosity=0, gui_logger_func=self._update_status)
@@ -1387,7 +1145,7 @@ class Main:
                 return None
 
             apq_data_structure = apq_parser_instance.data()
-            content_list = self._normalize_apq_data(apq_data_structure, file_path_to_read)
+            return self._normalize_apq_data(apq_data_structure, file_path_to_read)
 
         except ValueError as e:
             self._update_status(f"Помилка ініціалізації парсера для {file_path_to_read}: {e}", error=True)
@@ -1397,27 +1155,14 @@ class Main:
             print(f"Загальний виняток APQ ({file_path_to_read}): {type(e).__name__}: {e}")
             return None
 
-        return content_list if content_list else None
-
-    def read_wpt(self, path):
-        return self._read_specific_file(path, ".wpt")
-
-    def read_set(self, path):
-        return self._read_specific_file(path, ".set")
-
-    def read_rte(self, path):
-        return self._read_specific_file(path, ".rte")
-
-    def read_are(self, path):
-        return self._read_specific_file(path, ".are")
-
-    def read_trk(self, path):
-        return self._read_specific_file(path, ".trk")
+    def read_wpt(self, path): return self._read_specific_apq_file(path)
+    def read_set(self, path): return self._read_specific_apq_file(path)
+    def read_rte(self, path): return self._read_specific_apq_file(path)
+    def read_are(self, path): return self._read_specific_apq_file(path)
+    def read_trk(self, path): return self._read_specific_apq_file(path)
 
     def read_ldk(self, path):
-        """
-        Читання LDK-файлу з повною рекурсією по всіх nodes/files, витягує всі точки, лінії, полігони.
-        """
+        """Читання LDK-файлу з повною рекурсією по всіх nodes/files."""
         self._update_status(f"Читання LDK: {os.path.basename(path)}...", self.C_BUTTON_HOVER)
         all_normalized_content = []
         stats = {'nodes': 0, 'files': 0, 'points': 0, 'lines': 0, 'polygons': 0}
@@ -1431,44 +1176,25 @@ class Main:
             parsed_ldk_root_data = ldk_apq_file_instance.data()
 
             def extract_and_normalize_from_ldk_node(node_data, parent_original_path, depth=0):
-                if not node_data:
-                    return
-
+                if not node_data: return
                 stats['nodes'] += 1
-                node_path = node_data.get('path', '')
 
-                # Діагностика структури LDK
-                print(f"{'  ' * depth}[LDK-NODE] path={node_path} files={len(node_data.get('files', []))} nodes={len(node_data.get('nodes', []))}")
-
-                # Обробка всіх файлів (маршрути, треки, полігони, точки)
                 for ldk_file_entry in node_data.get('files', []):
                     stats['files'] += 1
                     inner_file_type = ldk_file_entry.get('type')
                     inner_file_name = ldk_file_entry.get('name')
 
                     self._update_status(f"Обробка з LDK: {inner_file_name}", self.C_BUTTON_HOVER)
-
-                    if inner_file_type == 'bin':
-                        self._update_status(f".bin з LDK: {inner_file_name}, експорт не підтримується.", warning=True)
-                        continue
+                    if inner_file_type == 'bin': continue
 
                     try:
                         file_content_bytes = base64.b64decode(ldk_file_entry['data_b64'])
-                    except Exception as e:
-                        self._update_status(f"Не вдалося декодувати base64 для {inner_file_name}: {e}", error=True)
-                        continue
-
-                    try:
                         contained_apq = ApqFile(
-                            rawdata=file_content_bytes,
-                            file_type=inner_file_type,
-                            rawname=inner_file_name,
-                            rawts=parsed_ldk_root_data.get('ts', time.time()),
-                            verbosity=0,
+                            rawdata=file_content_bytes, file_type=inner_file_type, rawname=inner_file_name,
+                            rawts=parsed_ldk_root_data.get('ts', time.time()), verbosity=0,
                             gui_logger_func=self._update_status
                         )
                         if contained_apq.parse_successful:
-                            # ВАЖЛИВО! Розгортаємо всі лінії/полігони у точки для CSV (expand_lines_to_points=True)
                             normalized_data = self._normalize_apq_data(
                                 contained_apq.data(), inner_file_name, expand_lines_to_points=True
                             )
@@ -1476,38 +1202,21 @@ class Main:
                                 for item_norm in normalized_data:
                                     item_norm['source_file'] = inner_file_name
                                     item_norm['ldk_parent'] = os.path.basename(parent_original_path)
-                                    # Підрахунок типів для діагностики
-                                    if item_norm.get('geometry_type') == 'Point':
-                                        stats['points'] += 1
-                                    elif item_norm.get('geometry_type') == 'LineString':
-                                        stats['lines'] += 1
-                                    elif item_norm.get('geometry_type') == 'Polygon':
-                                        stats['polygons'] += 1
                                 all_normalized_content.extend(normalized_data)
-                            else:
-                                print(f"{'  ' * depth}[LDK-FILE] {inner_file_name}: дані не нормалізовані")
-                        else:
-                            self._update_status(f"Помилка парсингу файлу з LDK: {inner_file_name}", warning=True)
                     except Exception as e:
                         self._update_status(f"Помилка обробки {inner_file_name} з LDK: {e}", error=True)
                         import traceback
                         traceback.print_exc()
 
-                # Рекурсивно обробити всі дочірні вузли
                 for child_node in node_data.get('nodes', []):
-                    extract_and_normalize_from_ldk_node(child_node, parent_original_path, depth=depth+1)
+                    extract_and_normalize_from_ldk_node(child_node, parent_original_path, depth + 1)
 
-            # Запуск рекурсії від root
             if parsed_ldk_root_data and parsed_ldk_root_data.get('root'):
                 extract_and_normalize_from_ldk_node(parsed_ldk_root_data['root'], path, depth=0)
-                print(f"[LDK-DONE] Всього вузлів: {stats['nodes']}, файлів: {stats['files']}, точок: {stats['points']}, ліній: {stats['lines']}, полігонів: {stats['polygons']}")
             else:
                 messagebox.showwarning("Увага LDK", f"LDK файл {os.path.basename(path)} порожній або має невірну структуру.")
                 return None
 
-        except ValueError as e:
-            messagebox.showerror("Помилка LDK", f"Не вдалося ініціалізувати парсер для LDK {os.path.basename(path)}: {e}")
-            return None
         except Exception as e:
             messagebox.showerror("Помилка читання LDK", f"Не вдалося обробити файл {os.path.basename(path)}.\n{type(e).__name__}: {e}")
             import traceback
@@ -1515,7 +1224,6 @@ class Main:
             return None
 
         return all_normalized_content if all_normalized_content else None
-
 
     def _read_kml_from_content(self, kml_content, source_filename="KML"):
         result = []
@@ -1538,7 +1246,6 @@ class Main:
             for placemark in findall_tags(root, 'Placemark'):
                 name_tag = find_tag(placemark, 'name')
                 name = name_tag.text.strip() if name_tag is not None and name_tag.text else f'{source_filename}_Point'
-
                 description_tag = find_tag(placemark, 'description')
                 description = description_tag.text.strip() if description_tag is not None and description_tag.text else ""
 
@@ -1547,25 +1254,16 @@ class Main:
                 inline_style_tag = find_tag(placemark, 'Style')
                 parsed_color_hex = None
 
+                style_node = None
                 if style_url_tag is not None and style_url_tag.text:
                     style_id = style_url_tag.text.lstrip('#')
                     style_node = root.find(f".//{{*}}Style[@id='{style_id}']") or root.find(
                         f".//{{*}}StyleMap[@id='{style_id}']//{{*}}Style")
-                    if style_node is not None:
-                        for style_type_node in [find_tag(style_node, 'IconStyle'), find_tag(style_node, 'LineStyle'),
-                                                find_tag(style_node, 'PolyStyle')]:
-                            if style_type_node is not None:
-                                color_node = find_tag(style_type_node, 'color')
-                                if color_node is not None and color_node.text:
-                                    kml_color_str = color_node.text.strip().lower()
-                                    if len(kml_color_str) == 8:
-                                        parsed_color_hex = f"#{kml_color_str[6:8]}{kml_color_str[4:6]}{kml_color_str[2:4]}"
-                                        break
-
                 elif inline_style_tag is not None:
-                    for style_type_node in [find_tag(inline_style_tag, 'IconStyle'),
-                                            find_tag(inline_style_tag, 'LineStyle'),
-                                            find_tag(inline_style_tag, 'PolyStyle')]:
+                    style_node = inline_style_tag
+
+                if style_node is not None:
+                    for style_type_node in [find_tag(style_node, st) for st in ['IconStyle', 'LineStyle', 'PolyStyle']]:
                         if style_type_node is not None:
                             color_node = find_tag(style_type_node, 'color')
                             if color_node is not None and color_node.text:
@@ -1573,7 +1271,6 @@ class Main:
                                 if len(kml_color_str) == 8:
                                     parsed_color_hex = f"#{kml_color_str[6:8]}{kml_color_str[4:6]}{kml_color_str[2:4]}"
                                     break
-
                 if parsed_color_hex:
                     color = self.convert_color(parsed_color_hex, "name", True)
 
@@ -1594,7 +1291,6 @@ class Main:
                             result.append(item_data)
                         except ValueError:
                             pass
-
                 elif linestring_coords_tag is not None and linestring_coords_tag.text:
                     points_data = [{'lon': float(p.split(',')[0]), 'lat': float(p.split(',')[1]),
                                     'alt': float(p.split(',')[2]) if len(p.split(',')) > 2 else 0.0} for p in
@@ -1603,7 +1299,6 @@ class Main:
                         item_data.update(
                             {"type": "LineString", "geometry_type": "LineString", "points_data": points_data})
                         result.append(item_data)
-
                 elif polygon_outer_coords_tag is not None and polygon_outer_coords_tag.text:
                     points_data = [{'lon': float(p.split(',')[0]), 'lat': float(p.split(',')[1]),
                                     'alt': float(p.split(',')[2]) if len(p.split(',')) > 2 else 0.0} for p in
@@ -1615,10 +1310,6 @@ class Main:
         except ET.ParseError as e:
             self._update_status(f"Помилка парсингу KML: {source_filename} ({e})", error=True)
             return None
-        except Exception as e:
-            self._update_status(f"Загальна помилка читання KML: {source_filename} ({e})", error=True)
-            return None
-
         return result if result else None
 
     def read_kml(self, path):
@@ -1738,7 +1429,7 @@ class Main:
                         color_name = self.convert_color(color_value, "name")
                         desc_parts = [f"{h.capitalize()}: {v}" for h, v in zip(header, row) if
                                       v is not None and header.index(h) not in [lat_col, lon_col, name_col,
-                                                                                color_col]]
+                                                                                 color_col]]
                         desc = "; ".join(desc_parts)
                         result.append(
                             {"name": name, "lat": lat, "lon": lon, "type": "XLSX Point", "color": color_name,
@@ -1858,6 +1549,9 @@ class Main:
             return None
         return result if result else None
 
+    # ==============================================================================
+    # МЕТОДИ ЗАПИСУ ФАЙЛІВ
+    # ==============================================================================
     def create_scene(self, contents_list, save_path):
         if not contents_list: return False
         items_data = []
@@ -1903,7 +1597,7 @@ class Main:
                 icon_style = ET.SubElement(style, "IconStyle")
                 ET.SubElement(icon_style, "color").text = kml_color
                 icon = ET.SubElement(icon_style, "Icon")
-                ET.SubElement(icon, "href").text = "http://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png"  # Standard icon
+                ET.SubElement(icon, "href").text = "http://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png"
                 line_style = ET.SubElement(style, "LineStyle")
                 ET.SubElement(line_style, "color").text = kml_color
                 ET.SubElement(line_style, "width").text = "2"
@@ -1927,7 +1621,7 @@ class Main:
                     coords_str += f" {coords_data[0]['lon']},{coords_data[0]['lat']},0"
                 if geom_type == "LineString":
                     geom = ET.SubElement(placemark, "LineString")
-                else:  # Polygon
+                else:
                     geom = ET.SubElement(placemark, "Polygon")
                     outer = ET.SubElement(geom, "outerBoundaryIs")
                     geom = ET.SubElement(outer, "LinearRing")
@@ -2009,173 +1703,84 @@ class Main:
             return True
         except xlsxwriter.exceptions.FileCreateError:
             return False
-            
-    # --- COLOR METHODS ---
-    @staticmethod
-    def _color_distance(rgb1: Tuple[int, int, int], rgb2: Tuple[int, int, int]) -> float:
-        """Calculate Euclidean distance between two RGB colors."""
-        return math.sqrt(sum((c1 - c2) ** 2 for c1, c2 in zip(rgb1, rgb2)))
 
-    def _find_closest_color_name(self, rgb_tuple: Tuple[int, int, int]) -> str:
-        """Finds the closest color name from the palette."""
-        if not isinstance(rgb_tuple, (list, tuple)) or len(rgb_tuple) < 3:
-            return "White"
-        rgb_tuple = tuple(max(0, min(255, int(c))) for c in rgb_tuple[:3])
-        min_dist = float('inf')
-        closest_name = "White"
-        for name, palette_rgb in self._palette_rgb.items():
-            dist = self._color_distance(rgb_tuple, palette_rgb)
-            if dist < min_dist:
-                min_dist = dist
-                closest_name = name
-        return closest_name
-
-    def convert_color(self, color_value: Any, target_format: str = 'name', allow_name_lookup_from_hex=False) -> str:
-        """
-        Приводить колір до різних форматів:
-        - 'name': англійська назва кольору (Red, Blue...)
-        - 'hex': HEX-рядок (#RRGGBB)
-        - 'str_rgb': рядок формату R,G,B
-        """
-        if not color_value:
-            return "White" if target_format == 'name' else self.colors["White"]
-
-        # Directly handle if it's already a valid color name
-        if isinstance(color_value, str) and color_value.capitalize() in self.colors:
-            color_name_en = color_value.capitalize()
-        else:
-            rgb_tuple = None
-            color_name_en = None
-            if isinstance(color_value, (list, tuple)):
-                rgb_tuple = color_value
-            elif isinstance(color_value, str):
-                value_lower = color_value.lower().strip()
-                # HEX
-                hex_match = re.fullmatch(r'#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})', value_lower)
-                if hex_match:
-                    hex_str = hex_match.group(1)
-                    if len(hex_str) == 3:
-                        hex_str = "".join([c * 2 for c in hex_str])
-                    rgb_tuple = (int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16))
-                else:
-                    # RGBA
-                    rgba_match = re.match(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', value_lower)
-                    if rgba_match:
-                        rgb_tuple = (int(rgba_match.group(1)), int(rgba_match.group(2)), int(rgba_match.group(3)))
-                    else:
-                        for keyword, en_name in self.color_keyword_map.items():
-                            if keyword in value_lower:
-                                color_name_en = en_name
-                                break
-            if rgb_tuple:
-                color_name_en = self._find_closest_color_name(rgb_tuple)
-            if not color_name_en:
-                print(f"[DEBUG] Не розпізнано колір: {color_value}, повертаю White")
-                color_name_en = "White"
-
-        # Return requested format
-        if target_format == 'name':
-            return color_name_en
-        elif target_format == 'hex':
-            return self.colors.get(color_name_en, self.colors["White"])
-        elif target_format == 'str_rgb':
-            h = self.colors.get(color_name_en, self.colors["White"]).lstrip('#')
-            return f"{int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)}"
-        return color_name_en
-
-    def color_to_csv_rgba(self, color_value):
-        """
-        Повертає рядок формату rgba(R,G,B,1) для заданого кольору.
-        """
-        hex_color = self.convert_color(color_value, target_format='hex')
-        if hex_color.startswith('#'):
-            hex_color = hex_color[1:]
-        r = int(hex_color[0:2], 16)
-        g = int(hex_color[2:4], 16)
-        b = int(hex_color[4:6], 16)
-        return f"rgba({r},{g},{b},1)"
-        
-    # --- NEW UNIFIED CSV LOGIC ---
+    # ==============================================================================
+    # ОСНОВНА ЗМІНА ТУТ: Логіка створення CSV
+    # ==============================================================================
     def create_csv(self, contents_list: List[Dict[str, Any]], base_save_path: str) -> bool:
-        """
-        Створює єдиний CSV файл для всіх типів геометрії (точки, лінії, полігони),
-        зберігаючи SIDC та інформацію про стиль у форматі, сумісному з еталоном.
-        """
         if not contents_list:
             self._update_status("Немає даних для запису в CSV.", warning=True)
             return False
 
-        self._update_status(f"Створення універсального CSV: {os.path.basename(base_save_path)}...",
-                            self.C_BUTTON_HOVER)
-
+        self._update_status(f"Створення CSV: {os.path.basename(base_save_path)}...", self.C_BUTTON_HOVER)
         headers = ["sidc", "id", "quantity", "name", "observation_datetime", "reliability_credibility",
                    "staff_comments", "platform_type", "direction", "speed", "coordinates", "comment 1", "comment 2",
                    "comment 3", "comment 4"]
+        is_layout_mode = base_save_path.lower().endswith(".csv(макет)")
 
         try:
             for chunk_index, i in enumerate(range(0, len(contents_list), self.CSV_CHUNK_SIZE)):
                 chunk_contents = contents_list[i:i + self.CSV_CHUNK_SIZE]
-                current_save_path = self._get_chunked_save_path(base_save_path, chunk_index)
+                current_save_path = self._get_chunked_save_path(base_save_path.replace(".csv(макет)", ".csv"), chunk_index)
 
-            try:
-                with open(path, mode='r', encoding='utf-8-sig') as infile:
-                    ...
-                    for i, row in enumerate(reader, 2):
-                        try:
-                            lat, lon = float(str(row[lat_key]).replace(',', '.')), float(str(row[lon_key]).replace(',', '.'))
-                            ...
-                        except Exception as e:
-                            self._update_status(f"CSV: помилка у рядку {i}: {e}", warning=True)
-                            continue
-            except Exception as e:
-                self._update_status(f"Помилка відкриття CSV: {e}", error=True)
-                return None  
+                with open(current_save_path, 'w', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(headers)
+
+                    if is_layout_mode: continue
+
+                    for item in chunk_contents:
+                        name = item.get('name', '')
+                        geom_type = item.get('geometry_type')
+                        
+                        ts = item.get('original_location_data', {}).get('ts')
+                        observation_datetime = ''
+                        if ts:
+                            try:
+                                if ts > 10**12: ts = ts / 1000.0
+                                observation_datetime = datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                            except (OSError, ValueError):
+                                observation_datetime = ''
 
                         row = [""] * len(headers)
                         row[3] = name
                         row[4] = observation_datetime
 
-                        # --- Логіка для Точок ---
+                        # Уніфікована логіка для всіх типів геометрії
                         if geom_type == 'Point':
                             wkt = f"POINT ({item.get('lon', 0.0)} {item.get('lat', 0.0)})"
-                            color_hex = self.convert_color(item.get("color"), 'hex')
-
                             row[0] = item.get('milgeo:meta:sidc') or POINT_SIDC
                             row[10] = wkt
-                            row[11] = color_hex  # comment 1 для кольору у форматі HEX
+                            # Стилі для точки
+                            row[11] = self.color_to_csv_rgba(item.get("color"))
+                            row[12] = "icon-scale: 1"
 
-                        # --- Логіка для Ліній та Полігонів ---
                         elif geom_type in ['LineString', 'Polygon']:
                             points_data = item.get('points_data', [])
                             if not points_data: continue
-
+                            
                             coords_parts = [f"{p.get('lon', 0.0)} {p.get('lat', 0.0)}" for p in points_data]
-
                             if geom_type == 'Polygon':
                                 if coords_parts and coords_parts[0] != coords_parts[-1]:
                                     coords_parts.append(coords_parts[0])
                                 wkt = f"POLYGON (({', '.join(coords_parts)}))"
-                            else:  # LineString
+                            else:
                                 wkt = f"LINESTRING ({', '.join(coords_parts)})"
 
-                            # Визначення кольору та SIDC
                             color_hex = self.convert_color(item.get('color'), 'hex')
                             sidc = get_line_sidc(color_hex)
                             row[0] = item.get('milgeo:meta:sidc') or sidc
                             row[10] = wkt
-                            
-                            # Додавання стилів у коментарі
-                            row[11] = "stroke-opacity: 1"
-                            row[12] = f"stroke: {color_hex}"
+                            # Стилі для лінії/полігону
+                            row[11] = self.color_to_csv_rgba(item.get("color"))
+                            row[12] = "icon-scale: 0"
                             row[13] = "stroke-width: 3"
-                            row[14] = "icon-scale: 0"
                         else:
-                            continue # Пропустити невідомі типи геометрії
-
+                            continue
+                        
                         writer.writerow(row)
 
-            self._update_status(f"Файл CSV успішно збережено: {os.path.basename(base_save_path)}",
-                                self.C_ACCENT_DONE)
+                self._update_status(f"Збережено: {os.path.basename(current_save_path)}", self.C_ACCENT_DONE)
             return True
         except Exception as e:
             self._update_status(f"Помилка під час створення CSV: {e}", error=True)
@@ -2213,33 +1818,14 @@ class Main:
                 return True
         except IOError:
             return False
-    
-    # --- МЕТОДИ ДЛЯ РОБОТИ З КОЛЬОРОМ ---
-    @staticmethod
-    def _color_distance(rgb1: Tuple[int, int, int], rgb2: Tuple[int, int, int]) -> float:
-        """Обчислює евклідову відстань між двома кольорами RGB."""
-        return math.sqrt(sum([(c1 - c2) ** 2 for c1, c2 in zip(rgb1, rgb2)]))
 
-    def _find_closest_color_name(self, rgb_tuple: Tuple[int, int, int]) -> str:
-        """Знаходить найближчу назву кольору з палітри."""
-        if not isinstance(rgb_tuple, (list, tuple)) or len(rgb_tuple) < 3:
-            return "White"
-        rgb_tuple = tuple(max(0, min(255, c)) for c in rgb_tuple[:3])
-        min_dist = float('inf')
-        closest_name = "White"
-        for name, palette_rgb in self._palette_rgb.items():
-            dist = self._color_distance(rgb_tuple, palette_rgb)
-            if dist < min_dist:
-                min_dist = dist
-                closest_name = name
-        return closest_name
-
+    # ==============================================================================
+    # МЕТОДИ ДЛЯ РОБОТИ З КОЛЬОРАМИ
+    # ==============================================================================
     def convert_color(self, color_value: Any, target_format: str = 'name', allow_name_lookup_from_hex=False) -> str:
-        """Надійно конвертує представлення кольору (назва, hex, rgb) у стандартизований колір з палітри."""
         if not color_value:
-            return "White" if target_format == 'name' else self.colors["White"]
-
-        if isinstance(color_value, str) and color_value.capitalize() in self.colors:
+            color_name_en = "White"
+        elif isinstance(color_value, str) and color_value.capitalize() in self.colors:
             color_name_en = color_value.capitalize()
         else:
             rgb_tuple = None
@@ -2251,8 +1837,7 @@ class Main:
                 hex_match = re.search(r'#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b', value_lower)
                 if hex_match:
                     hex_str = hex_match.group(1)
-                    if len(hex_str) == 3:
-                        hex_str = "".join([c * 2 for c in hex_str])
+                    if len(hex_str) == 3: hex_str = "".join([c * 2 for c in hex_str])
                     rgb_tuple = (int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16))
                 else:
                     rgba_match = re.search(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', value_lower)
@@ -2264,7 +1849,18 @@ class Main:
                                 color_name_en = en_name
                                 break
             if rgb_tuple:
-                color_name_en = self._find_closest_color_name(rgb_tuple)
+                def _find_closest_color_name(rgb: Tuple[int, int, int]) -> str:
+                    def _color_distance(rgb1, rgb2):
+                        return math.sqrt(sum([(c1 - c2) ** 2 for c1, c2 in zip(rgb1, rgb2)]))
+
+                    min_dist, closest_name = float('inf'), "White"
+                    for name, palette_rgb in self._palette_rgb.items():
+                        dist = _color_distance(rgb, palette_rgb)
+                        if dist < min_dist:
+                            min_dist, closest_name = dist, name
+                    return closest_name
+                color_name_en = _find_closest_color_name(rgb_tuple)
+            
             if not color_name_en:
                 color_name_en = "White"
 
@@ -2277,6 +1873,15 @@ class Main:
             return f"{int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)}"
         return color_name_en
 
+    def color_to_csv_rgba(self, color_value):
+        """Повертає рядок формату rgba(R,G,B,1) для заданого кольору."""
+        hex_color = self.convert_color(color_value, target_format='hex')
+        h = hex_color.lstrip('#')
+        return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},1)"
+
+    # ==============================================================================
+    # МЕТОДИ НУМЕРАЦІЇ
+    # ==============================================================================
     def _apply_selected_numeration(self, point_list):
         if not point_list: return []
         if len(point_list) == 1:
@@ -2315,15 +1920,11 @@ class Main:
         return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
     def apply_snake_numeration(self, content_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Присвоює порядкові номери точкам у стилі "змійка": рядок за рядком."""
-        if not content_list:
-            return content_list
+        if not content_list: return content_list
         points = [p for p in content_list if 'lat' in p and 'lon' in p]
-        if not points:
-            return content_list
-        min_lon, max_lon = min(p['lon'] for p in points), max(p['lon'] for p in points)
+        if not points: return content_list
         min_lat, max_lat = min(p['lat'] for p in points), max(p['lat'] for p in points)
-        lat_range = max_lat - min_lat if max_lat != min_lat else 1e-6  # Avoid division by zero
+        lat_range = max_lat - min_lat if max_lat != min_lat else 1e-6
         points.sort(key=lambda p: (int((p['lat'] - min_lat) / lat_range * 10),
                                    p['lon'] if int((p['lat'] - min_lat) / lat_range * 10) % 2 == 0 else -p['lon']))
         free_numbers = self.generate_free_numbers_list(len(points))
@@ -2386,12 +1987,214 @@ class Main:
         for i, item in enumerate(points): item['name'] = free_numbers[i]
         return points
 
+    # ==============================================================================
+    # ДОПОМІЖНІ ТА GUI МЕТОДИ
+    # ==============================================================================
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfig(self.canvas_window, width=event.width)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _redraw_file_list(self):
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        for i, file_data in enumerate(self.file_list):
+            item_frame = ttk.Frame(self.scrollable_frame, style="List.TFrame", padding=(5, 2))
+            item_frame.pack(fill='x', expand=True)
+            label_text = f"{i + 1}. {file_data['base_name']}"
+            if len(label_text) > 40: label_text = label_text[:37] + "..."
+            label = ttk.Label(item_frame, text=label_text, style="List.TLabel", anchor='w')
+            label.pack(side='left', fill='x', expand=True, padx=(0, 5))
+            format_mb = ttk.Menubutton(item_frame, text=file_data['format_var'].get(), style="TMenubutton", width=10)
+            format_menu_tk = tk.Menu(format_mb, tearoff=0, bg=self.C_SIDEBAR, fg=self.C_TEXT,
+                                     activebackground=self.C_BUTTON_HOVER)
+            for fmt_option in self.list_of_formats:
+                format_menu_tk.add_radiobutton(label=fmt_option, variable=file_data['format_var'], value=fmt_option,
+                                               command=lambda var=file_data['format_var'], button=format_mb,
+                                                              val=fmt_option: self._update_menubutton_text(var, button,
+                                                                                                           val))
+            format_mb['menu'] = format_menu_tk
+            format_mb.pack(side='left', padx=3)
+            color_mb = ttk.Menubutton(item_frame,
+                                      text=self.colors_en_ua.get(file_data['color_var'].get(),
+                                                                file_data['color_var'].get()), style="TMenubutton",
+                                      width=12)
+            color_menu_tk = tk.Menu(color_mb, tearoff=0, bg=self.C_SIDEBAR, fg=self.C_TEXT,
+                                    activebackground=self.C_BUTTON_HOVER)
+            for color_option in self.color_options:
+                disp_name = self.colors_en_ua.get(color_option, color_option)
+                color_menu_tk.add_radiobutton(label=disp_name, variable=file_data['color_var'], value=color_option,
+                                              command=lambda var=file_data['color_var'], button=color_mb,
+                                                             val_en=color_option: self._update_menubutton_text(var,
+                                                                                                               button,
+                                                                                                               val_en))
+            color_mb['menu'] = color_menu_tk
+            color_mb.pack(side='left', padx=3)
+            remove_btn = ttk.Button(item_frame, text="X", style='Remove.TButton', width=2,
+                                    command=lambda fd=file_data: self._remove_file(fd))
+            remove_btn.pack(side='left', padx=(3, 0))
+        if not self.file_list:
+            self._update_status("ДОДАЙТЕ ФАЙЛИ", self.C_STATUS_DEFAULT)
+            self.play_button.config(state="disabled")
+            if self.list_is_visible:
+                self.list_container.grid_forget()
+                self.list_is_visible = False
+                self.main_window.geometry("450x120")
+        else:
+            status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛ(ІВ)"
+            if len(self.file_list) == 1:
+                status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛ"
+            elif 2 <= len(self.file_list) <= 4:
+                status_text = f"ГОТОВО: {len(self.file_list)} ФАЙЛИ"
+            self._update_status(status_text, self.C_ACCENT_SUCCESS)
+            self.play_button.config(state="normal")
+        self.scrollable_frame.update_idletasks()
+        self.canvas.config(scrollregion=self.canvas.bbox("all"))
+        self.canvas.itemconfig(self.canvas_window, width=self.canvas.winfo_width())
+
+    def _update_menubutton_text(self, var, menubutton, value_english):
+        var.set(value_english)
+        display_text = self.colors_en_ua.get(value_english, value_english)
+        if not display_text: display_text = value_english
+        menubutton.config(text=display_text)
+
+    def _remove_file(self, file_to_remove):
+        self.file_list.remove(file_to_remove)
+        if not self.file_list and self.list_is_visible:
+            self.list_container.grid_forget()
+            self.list_is_visible = False
+            self.main_window.geometry("450x120")
+        self._redraw_file_list()
+
+    def add_files_to_list(self):
+        file_types = [("Підтримувані файли", " ".join(f"*{ext}" for ext in self.supported_read_formats)),
+                      ("AlpineQuest файли", ".wpt .set .rte .are .trk .ldk"), ("KML/KMZ/KME", ".kml .kmz .kme"),
+                      ("GPS Exchange", ".gpx"), ("Excel", ".xlsx"), ("CSV", ".csv"), ("SCENE JSON", ".scene"),
+                      ("Всі файли", "*.*")]
+        paths = filedialog.askopenfilenames(filetypes=file_types, title="Виберіть файли для конвертації")
+        new_files_added = False
+        if paths:
+            for path in paths:
+                if any(f['full_path'] == path for f in self.file_list):
+                    self._update_status(f"Файл вже у списку: {os.path.basename(path)}", warning=True)
+                    continue
+                if len(self.file_list) >= self.MAX_FILES:
+                    messagebox.showwarning("Ліміт файлів",
+                                           f"Максимальна кількість файлів у списку ({self.MAX_FILES}) досягнута.")
+                    break
+                base_name = os.path.basename(path)
+                file_ext = os.path.splitext(base_name)[1].lower()
+                if file_ext not in self.supported_read_formats:
+                    messagebox.showwarning("Формат не підтримується",
+                                           f"Програма не може імпортувати дані з файлів формату '{file_ext}'.")
+                    continue
+                default_export_format = ".kml"
+                if file_ext in [".wpt", ".set", ".rte", ".are", ".trk", ".ldk", ".kmz", ".kme", ".gpx", ".scene"]:
+                    default_export_format = ".kml"
+                elif file_ext in [".xlsx", ".csv"]:
+                    default_export_format = file_ext
+
+                file_data = {"full_path": path, "base_name": base_name,
+                             "format_var": tk.StringVar(value=default_export_format),
+                             "color_var": tk.StringVar(value=self.color_options[0])}
+                self.file_list.append(file_data)
+                new_files_added = True
+            if new_files_added and not self.list_is_visible:
+                self.list_container.grid(row=1, column=0, columnspan=3, sticky="nsew", padx=5, pady=(2, 5))
+                self.main_window.rowconfigure(1, weight=3)
+                self.list_is_visible = True
+                self.main_window.geometry("650x400")
+            if new_files_added:
+                self._redraw_file_list()
+            elif not self.file_list:
+                self._update_status("ФАЙЛИ НЕ ДОДАНО", self.C_STATUS_DEFAULT)
+
+    def _update_status(self, text, color=None, error=False, warning=False):
+        final_color = self.C_TEXT
+        bg_color = self.C_BACKGROUND
+        if error:
+            bg_color = self.C_ACCENT_ERROR
+        elif warning:
+            bg_color = self.C_ACCENT_DONE
+        elif color:
+            bg_color = color
+        else:
+            bg_color = self.C_STATUS_DEFAULT
+
+        self.status_label.config(text=text.upper(), background=bg_color, foreground=final_color)
+        if self.main_window.winfo_exists():
+            self.main_window.update_idletasks()
+
+    def _get_chunked_save_path(self, base_save_path, chunk_index):
+        if chunk_index == 0:
+            return base_save_path
+        directory, filename = os.path.split(base_save_path)
+        name_part, ext_part = os.path.splitext(filename)
+        name_part = re.sub(r'\(\d+\)$', '', name_part).strip()
+        new_filename = f"{name_part}({chunk_index + 1}){ext_part}"
+        return os.path.join(directory, new_filename)
+
+    def show_info(self):
+        messagebox.showinfo(
+            "Про програму",
+            f"Nexus v{self.program_version}\n"
+            "Програма для пакетної конвертації та обробки геоданих.\n\n"
+            f"Підтримувані формати для читання:\n{', '.join(self.supported_read_formats)}\n\n"
+            f"Підтримувані формати для запису:\n{', '.join(fmt for fmt in self.list_of_formats if fmt != '.csv(макет)')}"
+        )
+
+    def open_numeration_settings(self):
+        settings_win = tk.Toplevel(self.main_window)
+        settings_win.title("Налаштування нумерації")
+        settings_win.configure(background=self.C_BACKGROUND)
+        settings_win.transient(self.main_window)
+        settings_win.grab_set()
+        settings_win.resizable(False, False)
+
+        main_frame = ttk.Frame(settings_win, padding=15)
+        main_frame.pack(fill="both", expand=True)
+
+        ttk.Checkbutton(main_frame, text="Увімкнути нумерацію точок", variable=self.names_agree).pack(anchor="w", pady=(0, 10))
+
+        numeration_frame = ttk.LabelFrame(main_frame, text="Параметри нумерації", style="TFrame", padding=10)
+        numeration_frame.pack(fill="x", expand=True, pady=5)
+        ttk.Label(numeration_frame, text="Спосіб нумерації:").pack(anchor="w")
+        numeration_combo = ttk.Combobox(
+            numeration_frame, textvariable=self.chosen_numeration,
+            values=self.numerations, state="readonly", font=("Courier New", 9)
+        )
+        numeration_combo.pack(fill="x", pady=(2, 8))
+        numeration_combo.set(self.chosen_numeration.get())
+
+        ttk.Label(numeration_frame, text="Поворот осі сортування:").pack(anchor="w")
+        translation_combo = ttk.Combobox(
+            numeration_frame, textvariable=self.chosen_translation,
+            values=self.translations, state="readonly", font=("Courier New", 9)
+        )
+        translation_combo.pack(fill="x", pady=(2, 8))
+        translation_combo.set(self.chosen_translation.get())
+
+        ttk.Checkbutton(
+            numeration_frame,
+            text="Виключити номери (30-40, 500-510)",
+            variable=self.exceptions_agree
+        ).pack(anchor="w", pady=5)
+
+        ttk.Button(main_frame, text="Закрити", command=settings_win.destroy, style="Icon.TButton").pack(pady=(15, 0))
+
+        settings_win.update_idletasks()
+        main_x, main_y = self.main_window.winfo_x(), self.main_window.winfo_y()
+        main_w, main_h = self.main_window.winfo_width(), self.main_window.winfo_height()
+        win_w, win_h = settings_win.winfo_width(), settings_win.winfo_height()
+        x = main_x + (main_w // 2) - (win_w // 2)
+        y = main_y + (main_h // 2) - (win_h // 2)
+        settings_win.geometry(f"+{x}+{y}")
+        settings_win.focus_set()
+
 
 if __name__ == "__main__":
     try:
-        # Для кращого відображення на Windows
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (ImportError, AttributeError, OSError):
-        pass  # Не спрацює на інших ОС, і це нормально
+        pass
     app = Main()
     app.run()
