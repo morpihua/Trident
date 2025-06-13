@@ -650,12 +650,6 @@ class ApqFile(Base):
         def _tell(self):
             return self.rawoffs
 
-        def _seek(self, offset):
-            self.rawoffs = offset
-            return self.rawoffs
-         
-        def _tell(self):
-            return self.rawoffs
 
         def _size(self):
             return self.rawsize
