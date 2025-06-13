@@ -653,6 +653,9 @@ class ApqFile(Base):
         def _seek(self, offset):
             self.rawoffs = offset
             return self.rawoffs
+         
+        def _tell(self):
+            return self.rawoffs
 
         def _size(self):
             return self.rawsize
@@ -685,14 +688,7 @@ class ApqFile(Base):
                     output_data['root'] = self.data_parsed.get('root')
                 elif self._file_type == 'bin':
                     output_data['raw_content_b64'] = self.data_parsed.get('raw_content_b64')
-            return output_data
-
-        def _seek(self, offset):
-            self.rawoffs = offset
-            return self.rawoffs
-
-        def _tell(self):
-            return self.rawoffs
+            return output_data  
     
 class Main:
     """Головний клас програми з GUI для пакетної конвертації та обробки геоданих."""
@@ -2097,91 +2093,85 @@ class Main:
         
     # --- NEW UNIFIED CSV LOGIC ---
     def create_csv(self, contents_list: List[Dict[str, Any]], base_save_path: str) -> bool:
-        """
-        Створює єдиний CSV файл для всіх типів геометрії (точки, лінії, полігони),
-        зберігаючи SIDC та інформацію про стиль у форматі, сумісному з еталоном.
-        """
-        if not contents_list:
-            self._update_status("Немає даних для запису в CSV.", warning=True)
-            return False
+            """
+            Створює єдиний CSV файл для всіх типів геометрії (точки, лінії, полігони),
+            зберігаючи SIDC та інформацію про стиль у форматі, сумісному з еталоном.
+            """
+            if not contents_list:
+                self._update_status("Немає даних для запису в CSV.", warning=True)
+                return False
 
-        self._update_status(f"Створення універсального CSV: {os.path.basename(base_save_path)}...",
-                            self.C_BUTTON_HOVER)
+            self._update_status(f"Створення універсального CSV: {os.path.basename(base_save_path)}...",
+                                self.C_BUTTON_HOVER)
 
-        headers = ["sidc", "id", "quantity", "name", "observation_datetime", "reliability_credibility",
-                   "staff_comments", "platform_type", "direction", "speed", "coordinates", "comment 1", "comment 2",
-                   "comment 3", "comment 4"]
-
-        try:
-            for chunk_index, i in enumerate(range(0, len(contents_list), self.CSV_CHUNK_SIZE)):
-                chunk_contents = contents_list[i:i + self.CSV_CHUNK_SIZE]
-                current_save_path = self._get_chunked_save_path(base_save_path, chunk_index)
+            headers = ["sidc", "id", "quantity", "name", "observation_datetime", "reliability_credibility",
+                       "staff_comments", "platform_type", "direction", "speed", "coordinates", "comment 1", "comment 2",
+                       "comment 3", "comment 4"]
 
             try:
-                with open(path, mode='r', encoding='utf-8-sig') as infile:
-                    ...
-                    for i, row in enumerate(reader, 2):
-                        try:
-                            lat, lon = float(str(row[lat_key]).replace(',', '.')), float(str(row[lon_key]).replace(',', '.'))
-                            ...
-                        except Exception as e:
-                            self._update_status(f"CSV: помилка у рядку {i}: {e}", warning=True)
-                            continue
+                for chunk_index, i in enumerate(range(0, len(contents_list), self.CSV_CHUNK_SIZE)):
+                    chunk_contents = contents_list[i:i + self.CSV_CHUNK_SIZE]
+                    current_save_path = self._get_chunked_save_path(base_save_path, chunk_index)
+
+                    with open(current_save_path, "w", newline='', encoding="utf-8") as csvfile:
+                        writer = csv.writer(csvfile)
+                        writer.writerow(headers)
+                        for item in chunk_contents:
+                            row = [""] * len(headers)
+                            name = item.get('name', '')
+                            observation_datetime = ''
+                            geom_type = item.get('geometry_type')
+
+                            row[3] = name
+                            row[4] = observation_datetime
+
+                            # --- Логіка для Точок ---
+                            if geom_type == 'Point':
+                                wkt = f"POINT ({item.get('lon', 0.0)} {item.get('lat', 0.0)})"
+                                color_hex = self.convert_color(item.get("color"), 'hex')
+
+                                row[0] = item.get('milgeo:meta:sidc') or POINT_SIDC
+                                row[10] = wkt
+                                row[11] = color_hex  # comment 1 для кольору у форматі HEX
+
+                            # --- Логіка для Ліній та Полігонів ---
+                            elif geom_type in ['LineString', 'Polygon']:
+                                points_data = item.get('points_data', [])
+                                if not points_data:
+                                    continue
+
+                                coords_parts = [f"{p.get('lon', 0.0)} {p.get('lat', 0.0)}" for p in points_data]
+
+                                if geom_type == 'Polygon':
+                                    if coords_parts and coords_parts[0] != coords_parts[-1]:
+                                        coords_parts.append(coords_parts[0])
+                                    wkt = f"POLYGON (({', '.join(coords_parts)}))"
+                                else:  # LineString
+                                    wkt = f"LINESTRING ({', '.join(coords_parts)})"
+
+                                # Визначення кольору та SIDC
+                                color_hex = self.convert_color(item.get('color'), 'hex')
+                                sidc = get_line_sidc(color_hex)
+                                row[0] = item.get('milgeo:meta:sidc') or sidc
+                                row[10] = wkt
+                                # Додавання стилів у коментарі
+                                row[11] = "stroke-opacity: 1"
+                                row[12] = f"stroke: {color_hex}"
+                                row[13] = "stroke-width: 3"
+                                row[14] = "icon-scale: 0"
+                            else:
+                                continue  # Пропустити невідомі типи геометрії
+
+                            writer.writerow(row)
+
+                self._update_status(f"Файл CSV успішно збережено: {os.path.basename(base_save_path)}",
+                                    self.C_ACCENT_DONE)
+                return True
             except Exception as e:
-                self._update_status(f"Помилка відкриття CSV: {e}", error=True)
-                return None  
-
-                        row = [""] * len(headers)
-                        row[3] = name
-                        row[4] = observation_datetime
-
-                        # --- Логіка для Точок ---
-                        if geom_type == 'Point':
-                            wkt = f"POINT ({item.get('lon', 0.0)} {item.get('lat', 0.0)})"
-                            color_hex = self.convert_color(item.get("color"), 'hex')
-
-                            row[0] = item.get('milgeo:meta:sidc') or POINT_SIDC
-                            row[10] = wkt
-                            row[11] = color_hex  # comment 1 для кольору у форматі HEX
-
-                        # --- Логіка для Ліній та Полігонів ---
-                        elif geom_type in ['LineString', 'Polygon']:
-                            points_data = item.get('points_data', [])
-                            if not points_data: continue
-
-                            coords_parts = [f"{p.get('lon', 0.0)} {p.get('lat', 0.0)}" for p in points_data]
-
-                            if geom_type == 'Polygon':
-                                if coords_parts and coords_parts[0] != coords_parts[-1]:
-                                    coords_parts.append(coords_parts[0])
-                                wkt = f"POLYGON (({', '.join(coords_parts)}))"
-                            else:  # LineString
-                                wkt = f"LINESTRING ({', '.join(coords_parts)})"
-
-                            # Визначення кольору та SIDC
-                            color_hex = self.convert_color(item.get('color'), 'hex')
-                            sidc = get_line_sidc(color_hex)
-                            row[0] = item.get('milgeo:meta:sidc') or sidc
-                            row[10] = wkt
-                            
-                            # Додавання стилів у коментарі
-                            row[11] = "stroke-opacity: 1"
-                            row[12] = f"stroke: {color_hex}"
-                            row[13] = "stroke-width: 3"
-                            row[14] = "icon-scale: 0"
-                        else:
-                            continue # Пропустити невідомі типи геометрії
-
-                        writer.writerow(row)
-
-            self._update_status(f"Файл CSV успішно збережено: {os.path.basename(base_save_path)}",
-                                self.C_ACCENT_DONE)
-            return True
-        except Exception as e:
-            self._update_status(f"Помилка під час створення CSV: {e}", error=True)
-            import traceback
-            traceback.print_exc()
-            return False
+                self._update_status(f"Помилка під час створення CSV: {e}", error=True)
+                import traceback
+                traceback.print_exc()
+                return False
 
     def create_geojson(self, contents_list, save_path):
         if not contents_list: return False
