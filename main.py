@@ -1002,7 +1002,7 @@ class Main:
     CSV_CHUNK_SIZE: int = 2000
 
     def __init__(self):
-        self.program_version: str = "8.6.0_unified_csv"
+        self.program_version: str = "8.7.0_final"
         self.empty: str = "Не вибрано"
         self.file_ext: Optional[str] = None
         self.file_name: Optional[str] = None
@@ -1501,8 +1501,7 @@ class Main:
 
     def _normalize_apq_data(self, apq_parsed_data, file_path_for_log=""):
         normalized_content = []
-        if not apq_parsed_data or not isinstance(apq_parsed_data, dict) or not apq_parsed_data.get(
-                'parse_successful'):
+        if not apq_parsed_data or not isinstance(apq_parsed_data, dict) or not apq_parsed_data.get('parse_successful'):
             self._update_status(f"APQ парсер не повернув успішних даних для {file_path_for_log}", warning=True)
             return normalized_content
 
@@ -1538,8 +1537,7 @@ class Main:
 
             full_description = str(description_val) if description_val else ""
             if extra_desc_parts:
-                full_description = (full_description + " | " if full_description else "") + "; ".join(
-                    extra_desc_parts)
+                full_description = (full_description + " | " if full_description else "") + "; ".join(extra_desc_parts)
 
             entry = {
                 "name": final_name, "lat": point_lat, "lon": point_lon,
@@ -1565,6 +1563,7 @@ class Main:
                                        apq_source_file_type_for_item='wpt',
                                        source_file_global_meta_for_item=global_meta)
             if point: normalized_content.append(point)
+            print(f"Extracted {1 if point else 0} points from WPT")
 
         # --- SET, RTE
         elif apq_type in ['set', 'rte']:
@@ -1577,6 +1576,7 @@ class Main:
                     source_file_global_meta_for_item=global_meta
                 )
                 if point: normalized_content.append(point)
+            print(f"Extracted {len(normalized_content)} points from {apq_type.upper()}")
 
         # --- ARE (полігон)
         elif apq_type == 'are':
@@ -1600,6 +1600,7 @@ class Main:
                     'milgeo:meta:sidc': global_meta.get('sidc')
                 }
                 normalized_content.append(poly_item)
+            print(f"Extracted {len(area_points_data_for_polygon)} points from ARE (Polygon)")
 
         # --- TRK (POI + segments)
         elif apq_type == 'trk':
@@ -1642,6 +1643,8 @@ class Main:
                         'milgeo:meta:sidc': effective_seg_meta.get('sidc', global_meta.get('sidc'))
                     }
                     normalized_content.append(line_item)
+            points_in_all_segments = sum(len(seg.get('locations', [])) for seg in apq_parsed_data.get('segments', []))
+            print(f"Extracted {points_in_all_segments} points from all TRK segments")
 
         if not normalized_content and apq_type not in ['ldk', 'bin']:
             self._update_status(f"Увага: Не знайдено даних для нормалізації у {file_basename} (тип {apq_type})",
@@ -1690,6 +1693,8 @@ class Main:
     def read_ldk(self, path):
         self._update_status(f"Читання LDK: {os.path.basename(path)}...", self.C_BUTTON_HOVER)
         all_normalized_content = []
+        stats = {'nodes': 0, 'files': 0, 'points': 0, 'lines': 0, 'polygons': 0}
+
         try:
             ldk_apq_file_instance = ApqFile(path=path, verbosity=0, gui_logger_func=self._update_status)
             if not ldk_apq_file_instance.parse_successful:
@@ -1698,27 +1703,43 @@ class Main:
 
             parsed_ldk_root_data = ldk_apq_file_instance.data()
 
-            def extract_and_normalize_from_ldk_node(node_data, parent_original_path):
-                if not node_data: return
+            def extract_and_normalize_from_ldk_node(node_data, parent_original_path, depth=0):
+                if not node_data:
+                    return
 
+                stats['nodes'] += 1
+                node_path = node_data.get('path', '')
+
+                # Логування вузла
+                print(f"{'  ' * depth}[LDK-NODE] path={node_path} files={len(node_data.get('files', []))} nodes={len(node_data.get('nodes', []))}")
+
+                # Обробка всіх файлів у цьому вузлі
                 for ldk_file_entry in node_data.get('files', []):
-                    self._update_status(f"Обробка з LDK: {ldk_file_entry['name']}", self.C_BUTTON_HOVER)
+                    stats['files'] += 1
+                    inner_file_type = ldk_file_entry.get('type')
+                    inner_file_name = ldk_file_entry.get('name')
 
-                    file_content_bytes = base64.b64decode(ldk_file_entry['data_b64'])
-                    inner_file_type = ldk_file_entry['type']
-                    inner_file_name = ldk_file_entry['name']
+                    self._update_status(f"Обробка з LDK: {inner_file_name}", self.C_BUTTON_HOVER)
 
                     if inner_file_type == 'bin':
                         self._update_status(f".bin з LDK: {inner_file_name}, експорт не підтримується.", warning=True)
                         continue
 
                     try:
-                        contained_apq = ApqFile(rawdata=file_content_bytes,
-                                                file_type=inner_file_type,
-                                                rawname=inner_file_name,
-                                                rawts=parsed_ldk_root_data.get('ts', time.time()),
-                                                verbosity=0,
-                                                gui_logger_func=self._update_status)
+                        file_content_bytes = base64.b64decode(ldk_file_entry['data_b64'])
+                    except Exception as e:
+                        self._update_status(f"Не вдалося декодувати base64 для {inner_file_name}: {e}", error=True)
+                        continue
+
+                    try:
+                        contained_apq = ApqFile(
+                            rawdata=file_content_bytes,
+                            file_type=inner_file_type,
+                            rawname=inner_file_name,
+                            rawts=parsed_ldk_root_data.get('ts', time.time()),
+                            verbosity=0,
+                            gui_logger_func=self._update_status
+                        )
 
                         if contained_apq.parse_successful:
                             normalized_data = self._normalize_apq_data(contained_apq.data(), inner_file_name)
@@ -1726,29 +1747,42 @@ class Main:
                                 for item_norm in normalized_data:
                                     item_norm['source_file'] = inner_file_name
                                     item_norm['ldk_parent'] = os.path.basename(parent_original_path)
+
+                                    # Підрахунок типів
+                                    if item_norm.get('geometry_type') == 'Point':
+                                        stats['points'] += 1
+                                    elif item_norm.get('geometry_type') == 'LineString':
+                                        stats['lines'] += 1
+                                    elif item_norm.get('geometry_type') == 'Polygon':
+                                        stats['polygons'] += 1
+
                                 all_normalized_content.extend(normalized_data)
+                            else:
+                                print(f"{'  ' * depth}[LDK-FILE] {inner_file_name}: дані не нормалізовані")
                         else:
                             self._update_status(f"Помилка парсингу файлу з LDK: {inner_file_name}", warning=True)
                     except Exception as e:
                         self._update_status(f"Помилка обробки {inner_file_name} з LDK: {e}", error=True)
+                        import traceback
+                        traceback.print_exc()
 
+                # Рекурсивно обробити всі дочірні вузли
                 for child_node in node_data.get('nodes', []):
-                    extract_and_normalize_from_ldk_node(child_node, parent_original_path)
+                    extract_and_normalize_from_ldk_node(child_node, parent_original_path, depth=depth + 1)
 
+            # Запуск рекурсії від root
             if parsed_ldk_root_data and parsed_ldk_root_data.get('root'):
-                extract_and_normalize_from_ldk_node(parsed_ldk_root_data['root'], path)
+                extract_and_normalize_from_ldk_node(parsed_ldk_root_data['root'], path, depth=0)
+                print(f"[LDK-DONE] Всього вузлів: {stats['nodes']}, файлів: {stats['files']}, точок: {stats['points']}, ліній: {stats['lines']}, полігонів: {stats['polygons']}")
             else:
-                messagebox.showwarning("Увага LDK",
-                                       f"LDK файл {os.path.basename(path)} порожній або має невірну структуру.")
+                messagebox.showwarning("Увага LDK", f"LDK файл {os.path.basename(path)} порожній або має невірну структуру.")
                 return None
 
         except ValueError as e:
-            messagebox.showerror("Помилка LDK",
-                                   f"Не вдалося ініціалізувати парсер для LDK {os.path.basename(path)}: {e}")
+            messagebox.showerror("Помилка LDK", f"Не вдалося ініціалізувати парсер для LDK {os.path.basename(path)}: {e}")
             return None
         except Exception as e:
-            messagebox.showerror("Помилка читання LDK",
-                                   f"Не вдалося обробити файл {os.path.basename(path)}.\n{type(e).__name__}: {e}")
+            messagebox.showerror("Помилка читання LDK", f"Не вдалося обробити файл {os.path.basename(path)}.\n{type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -2554,8 +2588,9 @@ class Main:
 
 if __name__ == "__main__":
     try:
+        # For better rendering on Windows
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (ImportError, AttributeError, OSError):
-        pass
+        pass  # Fails on non-Windows systems, which is fine
     app = Main()
     app.run()
