@@ -1066,7 +1066,7 @@ class Main:
             icon_path = os.path.join(base_path, 'nexus.ico')
             if os.path.exists(icon_path): self.main_window.iconbitmap(icon_path)
         except Exception as e:
-            print(f"Попередження: не вдалося завантажити іконку: {e}")create_csv
+            print(f"Попередження: не вдалося завантажити іконку: {e}")
         self.main_window.protocol("WM_DELETE_WINDOW", self.exit)
         self.main_window.resizable(True, True)
 
@@ -2260,37 +2260,39 @@ class Main:
         if not color_value:
             return "White" if target_format == 'name' else self.colors["White"]
 
-        # Directly handle if it's already a valid color name
-        if isinstance(color_value, str) and color_value.capitalize() in self.colors:
-            color_name_en = color_value.capitalize()
-        else:
-            rgb_tuple = None
-            color_name_en = None
-            if isinstance(color_value, (list, tuple)):
-                rgb_tuple = color_value
-            elif isinstance(color_value, str):
-                value_lower = color_value.lower().strip()
-                hex_match = re.search(r'#?([0-9a-f]{6}|[0-9a-f]{3})\b', value_lower)
-                if hex_match:
-                    hex_str = hex_match.group(1)
-                    if len(hex_str) == 3:
-                        hex_str = "".join([c * 2 for c in hex_str])
-                    rgb_tuple = (int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16))
+    # Directly handle if it's already a valid color name
+    if isinstance(color_value, str) and color_value.capitalize() in self.colors:
+        color_name_en = color_value.capitalize()
+    else:
+        rgb_tuple = None
+        color_name_en = None
+        if isinstance(color_value, (list, tuple)):
+            rgb_tuple = color_value
+        elif isinstance(color_value, str):
+            value_lower = color_value.lower().strip()
+            # HEX
+            hex_match = re.search(r'#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b', value_lower)
+            if hex_match:
+                hex_str = hex_match.group(1)
+                if len(hex_str) == 3:
+                    hex_str = "".join([c * 2 for c in hex_str])
+                rgb_tuple = (int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16))
+            # RGBA
+            else:
+                rgba_match = re.search(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', value_lower)
+                if rgba_match:
+                    rgb_tuple = (int(rgba_match.group(1)), int(rgba_match.group(2)), int(rgba_match.group(3)))
                 else:
-                    rgba_match = re.search(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', value_lower)
-                    if rgba_match:
-                        rgb_tuple = (
-                        int(rgba_match.group(1)), int(rgba_match.group(2)), int(rgba_match.group(3)))
-                    else:
-                        for keyword, en_name in self.color_keyword_map.items():
-                            if keyword in value_lower:
-                                color_name_en = en_name
-                                break
-            if rgb_tuple:
-                color_name_en = self._find_closest_color_name(rgb_tuple)
-            
-            if not color_name_en:
-                 color_name_en = "White"
+                    for keyword, en_name in self.color_keyword_map.items():
+                        if keyword in value_lower:
+                            color_name_en = en_name
+                            break
+        if rgb_tuple:
+            color_name_en = self._find_closest_color_name(rgb_tuple)
+        if not color_name_en:
+            print(f"[DEBUG] Не розпізнано колір: {color_value}, повертаю White")
+            color_name_en = "White"
+    # Далі як у вас...
 
         # Return requested format
         if target_format == 'name':
@@ -2366,6 +2368,7 @@ class Main:
 
                             # Determine color and SIDC
                             color_csv = self.color_to_csv_rgba(item.get('color'))
+                            color_hex = self.convert_color(item.get('color'), 'hex')  # <-- додайте цей рядок
                             sidc = get_line_sidc(color_hex)
                             
                             row[0] = item.get('milgeo:meta:sidc') or sidc
