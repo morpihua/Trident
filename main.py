@@ -2014,13 +2014,13 @@ class Main:
     @staticmethod
     def _color_distance(rgb1: Tuple[int, int, int], rgb2: Tuple[int, int, int]) -> float:
         """Calculate Euclidean distance between two RGB colors."""
-        return math.sqrt(sum([(c1 - c2) ** 2 for c1, c2 in zip(rgb1, rgb2)]))
+        return math.sqrt(sum((c1 - c2) ** 2 for c1, c2 in zip(rgb1, rgb2)))
 
     def _find_closest_color_name(self, rgb_tuple: Tuple[int, int, int]) -> str:
         """Finds the closest color name from the palette."""
         if not isinstance(rgb_tuple, (list, tuple)) or len(rgb_tuple) < 3:
             return "White"
-        rgb_tuple = tuple(max(0, min(255, c)) for c in rgb_tuple[:3])
+        rgb_tuple = tuple(max(0, min(255, int(c))) for c in rgb_tuple[:3])
         min_dist = float('inf')
         closest_name = "White"
         for name, palette_rgb in self._palette_rgb.items():
@@ -2031,6 +2031,12 @@ class Main:
         return closest_name
 
     def convert_color(self, color_value: Any, target_format: str = 'name', allow_name_lookup_from_hex=False) -> str:
+        """
+        Приводить колір до різних форматів:
+        - 'name': англійська назва кольору (Red, Blue...)
+        - 'hex': HEX-рядок (#RRGGBB)
+        - 'str_rgb': рядок формату R,G,B
+        """
         if not color_value:
             return "White" if target_format == 'name' else self.colors["White"]
 
@@ -2044,15 +2050,16 @@ class Main:
                 rgb_tuple = color_value
             elif isinstance(color_value, str):
                 value_lower = color_value.lower().strip()
-                # HEXі
-                hex_match = re.search(r'#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b', value_lower)
+                # HEX
+                hex_match = re.fullmatch(r'#?([0-9a-fA-F]{6}|[0-9a-fA-F]{3})', value_lower)
                 if hex_match:
                     hex_str = hex_match.group(1)
                     if len(hex_str) == 3:
                         hex_str = "".join([c * 2 for c in hex_str])
                     rgb_tuple = (int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16))
                 else:
-                    rgba_match = re.search(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', value_lower)
+                    # RGBA
+                    rgba_match = re.match(r'rgba?\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})', value_lower)
                     if rgba_match:
                         rgb_tuple = (int(rgba_match.group(1)), int(rgba_match.group(2)), int(rgba_match.group(3)))
                     else:
@@ -2066,6 +2073,7 @@ class Main:
                 print(f"[DEBUG] Не розпізнано колір: {color_value}, повертаю White")
                 color_name_en = "White"
 
+        # Return requested format
         if target_format == 'name':
             return color_name_en
         elif target_format == 'hex':
@@ -2074,8 +2082,11 @@ class Main:
             h = self.colors.get(color_name_en, self.colors["White"]).lstrip('#')
             return f"{int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)}"
         return color_name_en
-        
+
     def color_to_csv_rgba(self, color_value):
+        """
+        Повертає рядок формату rgba(R,G,B,1) для заданого кольору.
+        """
         hex_color = self.convert_color(color_value, target_format='hex')
         if hex_color.startswith('#'):
             hex_color = hex_color[1:]
@@ -2083,7 +2094,7 @@ class Main:
         g = int(hex_color[2:4], 16)
         b = int(hex_color[4:6], 16)
         return f"rgba({r},{g},{b},1)"
-
+        
     # --- NEW UNIFIED CSV LOGIC ---
     def create_csv(self, contents_list: List[Dict[str, Any]], base_save_path: str) -> bool:
         """
@@ -2106,20 +2117,19 @@ class Main:
                 chunk_contents = contents_list[i:i + self.CSV_CHUNK_SIZE]
                 current_save_path = self._get_chunked_save_path(base_save_path, chunk_index)
 
-                with open(current_save_path, "w", encoding="UTF-8", newline='') as f_out:
-                    writer = csv.writer(f_out, quoting=csv.QUOTE_ALL)
-                    writer.writerow(headers)
-
-                    for item in chunk_contents:
-                        geom_type = item.get("geometry_type")
-                        name = item.get('name', '')
-                        ts = item.get('original_location_data', {}).get('ts')
-                        observation_datetime = ""
-                        if ts is not None and isinstance(ts, (int, float)) and ts > 0:
-                            try:
-                                observation_datetime = datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-                            except (ValueError, TypeError, OSError):
-                                observation_datetime = ""   
+            try:
+                with open(path, mode='r', encoding='utf-8-sig') as infile:
+                    ...
+                    for i, row in enumerate(reader, 2):
+                        try:
+                            lat, lon = float(str(row[lat_key]).replace(',', '.')), float(str(row[lon_key]).replace(',', '.'))
+                            ...
+                        except Exception as e:
+                            self._update_status(f"CSV: помилка у рядку {i}: {e}", warning=True)
+                            continue
+            except Exception as e:
+                self._update_status(f"Помилка відкриття CSV: {e}", error=True)
+                return None  
 
                         row = [""] * len(headers)
                         row[3] = name
