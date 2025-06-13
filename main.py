@@ -184,14 +184,6 @@ class Base:
             return None
 
 
-# --- Клас ApqFile ---
-import os
-import struct
-import base64
-import time
-import re
-from datetime import datetime, timezone
-
 class ApqFile(Base):
     V100_HEADER_MAGIC_MASK = 0x50500000
     LDK_MAGIC_HEADER = 0x4C444B3A
@@ -204,8 +196,7 @@ class ApqFile(Base):
     MAX_REASONABLE_STRING_LEN = 65536 * 2
     MAX_REASONABLE_ENTRIES = 100000
 
-    def __init__(self, path=None, rawdata=None, file_type=None, rawname=None, rawts=None, verbosity=0,
-                 gui_logger_func=None):
+    def __init__(self, path=None, rawdata=None, file_type=None, rawname=None, rawts=None, verbosity=0, gui_logger_func=None):
         super().__init__(verbosity, gui_logger_func)
         self.path = path
         self.rawdata = rawdata
@@ -369,24 +360,25 @@ class ApqFile(Base):
 
     def _get_metadata(self):
         n_meta_entries = self._getval('int')
-        if n_meta_entries is None or n_meta_entries < 0 or n_meta_entries > self.MAX_REASONABLE_ENTRIES:
+        if not isinstance(n_meta_entries, int) or n_meta_entries is None or n_meta_entries < 0 or n_meta_entries > self.MAX_REASONABLE_ENTRIES:
             return {}
         meta = {}
         for _ in range(n_meta_entries):
             name_len = self._getval('int')
-            name_str = self._getval('string', name_len) if name_len else None
+            name_str = self._getval('string', name_len) if name_len and isinstance(name_len, int) and name_len > 0 else (None if name_len is None else "")
             data_len_or_type = self._getval('int')
             data_value = None
-            if data_len_or_type == -1:
-                data_value = self._getval('bool')
-            elif data_len_or_type == -2:
-                data_value = self._getval('long')
-            elif data_len_or_type == -3:
-                data_value = self._getval('double')
-            elif data_len_or_type == -4:
-                data_value = self._getval('int+raw')
-            elif data_len_or_type >= 0:
-                data_value = self._getval('string', data_len_or_type)
+            if data_len_or_type is not None:
+                if data_len_or_type == -1:
+                    data_value = self._getval('bool')
+                elif data_len_or_type == -2:
+                    data_value = self._getval('long')
+                elif data_len_or_type == -3:
+                    data_value = self._getval('double')
+                elif data_len_or_type == -4:
+                    data_value = self._getval('int+raw')
+                elif data_len_or_type >= 0:
+                    data_value = self._getval('string', data_len_or_type)
             if name_str:
                 meta[name_str] = data_value
         return meta
@@ -404,7 +396,7 @@ class ApqFile(Base):
     def _get_waypoints(self):
         wp_list = []
         n_wp = self._getval('int')
-        if n_wp is None or n_wp < 0 or n_wp > self.MAX_REASONABLE_ENTRIES:
+        if not isinstance(n_wp, int) or n_wp is None or n_wp < 0 or n_wp > self.MAX_REASONABLE_ENTRIES:
             return []
         for _ in range(n_wp):
             meta = self._get_metadata()
@@ -417,7 +409,7 @@ class ApqFile(Base):
     def _get_locations(self):
         loc_list = []
         n_loc = self._getval('int')
-        if n_loc is None or n_loc < 0 or n_loc > self.MAX_REASONABLE_ENTRIES * 10:
+        if not isinstance(n_loc, int) or n_loc is None or n_loc < 0 or n_loc > self.MAX_REASONABLE_ENTRIES * 10:
             return []
         for _ in range(n_loc):
             loc = self._get_location()
@@ -518,7 +510,6 @@ class ApqFile(Base):
         return b"".join(data_chunks)
 
     def _get_node(self, offset, current_path_prefix="/", uid_for_path=None):
-        # Переміщаємось у файл
         if offset >= self.rawsize:
             self.error(f"Некоректний offset вузла LDK: {offset}")
             return None
@@ -635,7 +626,6 @@ class ApqFile(Base):
             if path_part_for_name:
                 path_part_for_name = "_" + path_part_for_name
             contained_file_unique_name = f"{ldk_base_fn_for_contained}{path_part_for_name}_UID{entry_def.get('uid', 0):08X}.{type_str_from_map}"
-            # --- ДІАГНОСТИКА ---
             print(f"LDK file UID={entry_def.get('uid')} type_byte=0x{file_type_val:02x} -> {type_str_from_map} ({contained_file_unique_name})")
             node_obj['files'].append({
                 'name': contained_file_unique_name,
@@ -647,42 +637,45 @@ class ApqFile(Base):
 
         return node_obj
 
-        def _tell(self):
-            return self.rawoffs
+    def _tell(self):
+        return self.rawoffs
 
+    def _seek(self, offset):
+        self.rawoffs = offset
+        return self.rawoffs
 
-        def _size(self):
-            return self.rawsize
+    def _size(self):
+        return self.rawsize
 
-        def type(self):
-            return self._file_type
+    def type(self):
+        return self._file_type
 
-        def data(self):
-            return self.get_parsed_data()
+    def data(self):
+        return self.get_parsed_data()
 
-        def get_parsed_data(self):
-            output_data = {
-                'ts': self.rawts, 'type': self._file_type,
-                'path': self.path or self.rawname,
-                'file': os.path.basename(self.path or self.rawname or "unknown_file"),
-                'parse_successful': self.parse_successful
-            }
-            if self.parse_successful:
-                if self._file_type == 'wpt':
-                    output_data.update({'meta': self.data_parsed.get('meta'), 'location': self.data_parsed.get('location')})
-                elif self._file_type in ['set', 'rte']:
-                    output_data.update({'meta': self.data_parsed.get('meta'), 'waypoints': self.data_parsed.get('waypoints')})
-                elif self._file_type == 'are':
-                    output_data.update({'meta': self.data_parsed.get('meta'), 'locations': self.data_parsed.get('locations')})
-                elif self._file_type == 'trk':
-                    output_data.update({'meta': self.data_parsed.get('meta'),
-                                       'waypoints': self.data_parsed.get('waypoints'),
-                                       'segments': self.data_parsed.get('segments')})
-                elif self._file_type == 'ldk':
-                    output_data['root'] = self.data_parsed.get('root')
-                elif self._file_type == 'bin':
-                    output_data['raw_content_b64'] = self.data_parsed.get('raw_content_b64')
-            return output_data  
+    def get_parsed_data(self):
+        output_data = {
+            'ts': self.rawts, 'type': self._file_type,
+            'path': self.path or self.rawname,
+            'file': os.path.basename(self.path or self.rawname or "unknown_file"),
+            'parse_successful': self.parse_successful
+        }
+        if self.parse_successful:
+            if self._file_type == 'wpt':
+                output_data.update({'meta': self.data_parsed.get('meta'), 'location': self.data_parsed.get('location')})
+            elif self._file_type in ['set', 'rte']:
+                output_data.update({'meta': self.data_parsed.get('meta'), 'waypoints': self.data_parsed.get('waypoints')})
+            elif self._file_type == 'are':
+                output_data.update({'meta': self.data_parsed.get('meta'), 'locations': self.data_parsed.get('locations')})
+            elif self._file_type == 'trk':
+                output_data.update({'meta': self.data_parsed.get('meta'),
+                                   'waypoints': self.data_parsed.get('waypoints'),
+                                   'segments': self.data_parsed.get('segments')})
+            elif self._file_type == 'ldk':
+                output_data['root'] = self.data_parsed.get('root')
+            elif self._file_type == 'bin':
+                output_data['raw_content_b64'] = self.data_parsed.get('raw_content_b64')
+        return output_data
     
 class Main:
     """Головний клас програми з GUI для пакетної конвертації та обробки геоданих."""
