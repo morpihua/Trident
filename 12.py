@@ -783,9 +783,18 @@ class Main:
 
     def _read_specific_file(self, path, ext):
         try:
-            apq = ApqFile(path=path, verbosity=-1, gui_logger_func=self._update_status)
-            return self._normalize_apq_content(apq.data(), path) if apq.parse_successful else None
+            apq = ApqFile(path=path, verbosity=1, gui_logger_func=self._update_status)
+            if not apq.parse_successful:
+                self._update_status(f"Не вдалося розпарсити {ext.upper()}: {os.path.basename(path)}. "
+                                   f"Можливо, файл пошкоджений або має невірний формат.", error=True)
+            if apq._file_type == "bin":
+                self._update_status(f"Файл {os.path.basename(path)} є бінарним і не підтримується для конвертації.", warning=True)
+                return None
+                
+            return self._normalize_apq_content(apq.data(), path)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self._update_status(f"Помилка {ext.upper()}: {os.path.basename(path)}: {e}", error=True)
             return None
 
@@ -1133,7 +1142,7 @@ class Main:
                 scene_items.append({
                     "color": item.get("color", "White"), "creationDate": int(time.time() * 1000), "description": item.get("description"),
                     "guid": str(uuid.uuid4()), "name": str(item.get("name", "N/A")),
-                    "position": {"alt": 0.0, "lat": item.get("lon"), "lon": item.get("lat")}, # Lat/Lon swap for SCENE
+                    "position": {"alt": 0.0, "lat": item.get("lat"), "lon": item.get("lon")}, # Lat/Lon swap for SCENE
                     "type": item.get("type", "Landmark")})
         scene_obj = {"scene": {"items": scene_items, "name": os.path.splitext(os.path.basename(save_path))[0]}, "version": 7}
         try:
