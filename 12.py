@@ -407,8 +407,10 @@ class ApqFile(Base):
 
     def _parse_ldk(self):
         hdr = self._getvalmulti(magic='int', archVersion='int', rootOffset='pointer', res1='long', res2='long', res3='long', res4='long')
+        print(f"DEBUG LDK header: {hdr}")
         if hdr.get('rootOffset') is None: return False
         self.data_parsed['root'] = self._get_node(hdr['rootOffset'])
+        print(f"DEBUG LDK: Розібраний root: {self.data_parsed['root'] is not None}")
         return self.data_parsed.get('root') is not None
 
     def _get_node_data(self, initial_offset):
@@ -521,6 +523,47 @@ class Main:
 
         self._configure_styles()
         self._build_main_ui()
+        
+    def convert_color(self, color_value, mode='name'):
+        """
+        Перетворює колір у потрібний формат:
+        - mode='hex': повертає hex (#rrggbb)
+        - mode='name': повертає англомовну назву кольору із self.colors або 'White'
+        """
+        # Якщо вже hex у вигляді "#xxxxxx"
+        if isinstance(color_value, str) and color_value.startswith("#") and len(color_value) == 7:
+            if mode == 'hex':
+                return color_value.lower()
+            else:
+                for k, v in self.colors.items():
+                    if v.lower() == color_value.lower():
+                        return k
+                return 'White'
+        # Якщо вже англійська або українська назва
+        if isinstance(color_value, str):
+            # Якщо укр, спробуй перекласти
+            if hasattr(self, 'colors_en_ua') and color_value in self.colors_en_ua.values():
+                for k, v in self.colors_en_ua.items():
+                    if v == color_value:
+                        color_value = k
+                        break
+            # Якщо англійська
+            if color_value in self.colors:
+                if mode == 'hex':
+                    return self.colors[color_value]
+                else:
+                    return color_value
+        # Якщо rgb-кортеж
+        if isinstance(color_value, tuple) and len(color_value) == 3:
+            hex_val = '#{:02x}{:02x}{:02x}'.format(*color_value)
+            if mode == 'hex':
+                return hex_val
+            else:
+                for k, v in self.colors.items():
+                    if v.lower() == hex_val:
+                        return k
+                return 'White'
+        return '#ffffff' if mode == 'hex' else 'White'
 
     def _configure_styles(self):
         style = ttk.Style(self.main_window)
@@ -783,15 +826,30 @@ class Main:
 
     def _read_specific_file(self, path, ext):
         try:
-            apq = ApqFile(path=path, verbosity=1, gui_logger_func=self._update_status)
+            apq = ApqFile(path=path, verbosity=2, gui_logger_func=self._update_status)
             if not apq.parse_successful:
-                self._update_status(f"Не вдалося розпарсити {ext.upper()}: {os.path.basename(path)}. "
-                                   f"Можливо, файл пошкоджений або має невірний формат.", error=True)
-            if apq._file_type == "bin":
-                self._update_status(f"Файл {os.path.basename(path)} є бінарним і не підтримується для конвертації.", warning=True)
+                self._update_status(
+                    f"Не вдалося розпарсити {ext.upper()}: {os.path.basename(path)}. "
+                    f"Можливо, файл пошкоджений або має невірний формат.",
+                    error=True
+                )
                 return None
-                
-            return self._normalize_apq_content(apq.data(), path)
+            data = apq.data()
+            # Для ApqFile .data() повертає dict, але якщо парсинг не вдався або даних немає — повертає порожній dict
+            if not data or not data.get('parse_successful'):
+                self._update_status(
+                    f"Парсер не повернув даних для {ext.upper()} ({os.path.basename(path)}). "
+                    f"Можливо, файл порожній або невірної структури.",
+                    error=True
+                )
+                return None
+            if apq._file_type == "bin":
+                self._update_status(
+                    f"Файл {os.path.basename(path)} є бінарним та не підтримується для конвертації.",
+                    warning=True
+                )
+                return None
+            return self._normalize_apq_content(data, path)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -808,39 +866,73 @@ class Main:
         self._update_status(f"Читання LDK: {os.path.basename(path)}...", self.C_BUTTON_HOVER)
         all_normalized_content = []
         try:
-            ldk_apq_file_instance = ApqFile(path=path, verbosity=-1, gui_logger_func=self._update_status)
+            ldk_apq_file_instance = ApqFile(path=path, verbosity=2, gui_logger_func=self._update_status)
             if not ldk_apq_file_instance.parse_successful:
-                messagebox.showerror("Помилка LDK", f"Не вдалося розпарсити LDK файл: {os.path.basename(path)}")
+                self._update_status(
+                    f"Не вдалося розпарсити LDK файл: {os.path.basename(path)}. "
+                    f"Можливо, файл пошкоджений або має невірний формат.",
+                    error=True
+                )
                 return None
             parsed_ldk_root_data = ldk_apq_file_instance.data()
 
             def extract_from_node(node_data):
-                if not node_data: return
+                if not node_data:
+                    print("DEBUG: contained_apq.data() for", ldk_file_entry.get('name'), ":", contained_apq.data())
+                    return
                 for ldk_file_entry in node_data.get('files', []):
+                    print(f"DEBUG LDK: Вкладений файл: {ldk_file_entry.get('name')} тип: {ldk_file_entry.get('type')} розмір: {ldk_file_entry.get('size')}")
                     try:
                         inner_file_type = ldk_file_entry.get('type')
-                        if inner_file_type == 'bin': continue
+                        if inner_file_type == 'bin':
+                            continue
                         file_bytes = base64.b64decode(ldk_file_entry['data_b64'])
-                        contained_apq = ApqFile(rawdata=file_bytes, file_type=inner_file_type, rawname=ldk_file_entry.get('name'), verbosity=-1)
+                        contained_apq = ApqFile(rawdata=file_bytes, file_type=inner_file_type,
+                                               rawname=ldk_file_entry.get('name'), verbosity=2,
+                                               gui_logger_func=self._update_status)
                         if contained_apq.parse_successful:
                             normalized_data = self._normalize_apq_content(contained_apq.data(), path)
-                            if normalized_data: all_normalized_content.extend(normalized_data)
-                    except Exception: continue
+                            if normalized_data:
+                                all_normalized_content.extend(normalized_data)
+                        else:
+                            self._update_status(
+                                f"Вкладений файл LDK ({ldk_file_entry.get('name')}) не розпізнано.",
+                                warning=True
+                            )
+                    except Exception as e:
+                        import traceback
+                        traceback.print_exc()
+                        self._update_status(
+                            f"Помилка розбору вкладеного файлу LDK ({ldk_file_entry.get('name')}): {type(e).__name__}: {e}",
+                            warning=True
+                        )
+                        continue
                 for child_node in node_data.get('nodes', []):
+                    print(f"DEBUG LDK: Опрацьовуємо вузол: {node_data.get('path')} з файлами: {len(node_data.get('files', []))} і дочірніми: {len(node_data.get('nodes', []))}")
                     extract_from_node(child_node)
-            
+
             if parsed_ldk_root_data and parsed_ldk_root_data.get('root'):
                 extract_from_node(parsed_ldk_root_data['root'])
             else:
-                messagebox.showwarning("Увага LDK", f"LDK файл {os.path.basename(path)} порожній або має невірну структуру.")
+                self._update_status(
+                    f"LDK файл {os.path.basename(path)} порожній або має невірну структуру.",
+                    warning=True
+                )
                 return None
         except Exception as e:
-            messagebox.showerror("Помилка читання LDK", f"Не вдалося обробити файл {os.path.basename(path)}.\n{type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            self._update_status(
+                f"Помилка читання LDK: {os.path.basename(path)}: {type(e).__name__}: {e}",
+                error=True
+            )
             return None
         return all_normalized_content if all_normalized_content else None
 
     def _normalize_apq_content(self, data, path):
         normalized_content = []
+        print("DEBUG: type:", apq_type, "data keys:", list(data.keys()))
+        print("DEBUG: waypoints:", data.get('waypoints'))
         if not data: return normalized_content
         apq_type = data.get('type')
         global_meta = data.get('meta', {})
@@ -852,25 +944,49 @@ class Main:
             name = eff_meta.get('name', f"{prefix}_{idx + 1}")
             color = self.convert_color(eff_meta.get('color', 'White'), 'name')
             desc = eff_meta.get('comment', eff_meta.get('description', ''))
-            return {"name": name, "lat": loc_data['lat'], "lon": loc_data['lon'], "type": eff_meta.get('sym', 'Landmark'), "color": color, "description": desc, "geometry_type": "Point", "original_location_data": loc_data}
+            return {
+                "name": name,
+                "lat": loc_data['lat'],
+                "lon": loc_data['lon'],
+                "type": eff_meta.get('sym', 'Landmark'),
+                "color": color,
+                "description": desc,
+                "geometry_type": "Point",
+                "original_location_data": loc_data
+            }
 
         if apq_type == 'wpt':
-            if point := _create_point(data.get('location'), {}, 'Waypoint', 0): normalized_content.append(point)
+            if point := _create_point(data.get('location'), {}, 'Waypoint', 0):
+                normalized_content.append(point)
         elif apq_type in ['set', 'rte']:
-            for i, wpt in enumerate(data.get('waypoints', [])):
-                if point := _create_point(wpt.get('location'), wpt.get('meta', {}), global_meta.get('name', 'Wpt'), i): normalized_content.append(point)
+            waypoints = data.get('waypoints') or data.get('points') or data.get('locations') or []
+            for i, wpt in enumerate(waypoints):
+                if point := _create_point(wpt.get('location', wpt), wpt.get('meta', {}), global_meta.get('name', 'Wpt'), i):
+                    normalized_content.append(point)
+
         elif apq_type == 'are':
             points = [loc for loc in data.get('locations', []) if loc and loc.get('lon') is not None]
             if len(points) >= 3:
-                normalized_content.append({'name': global_meta.get('name', 'Area'), 'geometry_type': 'Polygon', 'points_data': points, 'color': self.convert_color(global_meta.get('color', 'Blue'), 'name'), 'description': global_meta.get('description', '')})
+                normalized_content.append({
+                    'name': global_meta.get('name', 'Area'),
+                    'geometry_type': 'Polygon',
+                    'points_data': points,
+                    'color': self.convert_color(global_meta.get('color', 'Blue'), 'name')
+                })
         elif apq_type == 'trk':
             for i, poi in enumerate(data.get('waypoints', [])):
-                if point := _create_point(poi.get('location'), poi.get('meta', {}), global_meta.get('name', 'POI'), i): normalized_content.append(point)
+                if point := _create_point(poi.get('location'), poi.get('meta', {}), global_meta.get('name', 'POI'), i):
+                    normalized_content.append(point)
             for i, seg in enumerate(data.get('segments', [])):
                 points = [loc for loc in seg.get('locations', []) if loc and loc.get('lon') is not None]
                 if len(points) >= 2:
                     seg_meta = {**global_meta, **seg.get('meta', {})}
-                    normalized_content.append({'name': seg_meta.get('name', f"{global_meta.get('name', 'Track')}_{i+1}"), 'geometry_type': 'LineString', 'points_data': points, 'color': self.convert_color(seg_meta.get('color', 'Red'), 'name'), 'description': seg_meta.get('description', '')})
+                    normalized_content.append({
+                        'name': seg_meta.get('name', f"{global_meta.get('name', 'Track')}_{i+1}"),
+                        'geometry_type': 'LineString',
+                        'points_data': points,
+                        'color': self.convert_color(seg_meta.get('color', 'Red'), 'name')
+                    })
         return normalized_content
 
     def _read_kml_from_content(self, kml_content, source_filename="KML"):
